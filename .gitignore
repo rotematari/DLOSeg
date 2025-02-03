@@ -1,1 +1,18 @@
 .venv/
+log/
+*.egg*
+
+
+# sam2_rt
+
+.src/sam2_rt/DS_Store
+src/sam2_rt/__pycache__/
+*-checkpoint.ipynb
+*.egg*
+build/*
+_C.*
+src/sam2_rt/outputs/*
+src/sam2_rt/checkpoints/*.pt
+
+# clipseg 
+src/clipseg/weights/
