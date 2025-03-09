@@ -1,0 +1,3 @@
+[submodule "src/sam2_realtime"]
+	path = src/sam2_realtime
+	url = https://github.com/zdata-inc/sam2_realtime
