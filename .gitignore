@@ -3,16 +3,19 @@ log/
 *.egg*
 
 
-# sam2_rt
+archive/
 
-.src/sam2_rt/DS_Store
+
 src/sam2_rt/__pycache__/
 *-checkpoint.ipynb
 *.egg*
 build/*
 _C.*
-src/sam2_rt/outputs/*
-src/sam2_rt/checkpoints/*.pt
+src/sam2_realtime/outputs/*
+src/sam2_realtime/checkpoints/*.pt
+src/sam2_realtime/notebooks/
+src/sam2_realtime/demo/
+src/sam2_realtime/sav/
 
 # clipseg 
 src/clipseg/weights/

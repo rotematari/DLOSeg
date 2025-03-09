@@ -1,206 +1,109 @@
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
+import cv2
+import numpy as np
+from transformers import CLIPSegProcessor, CLIPSegForImageSegmentation
+# from segment_anything import SamPredictor, sam_model_registry
+from PIL import Image
+import matplotlib.pyplot as plt
 
-from src.sam2_rt.sam2.build_sam import build_sam2
-from src.sam2_rt.sam2.sam2_image_predictor import SAM2ImagePredictor
+# Load CLIPSeg Model
+device = "cuda" if torch.cuda.is_available() else "cpu"
+processor = CLIPSegProcessor.from_pretrained("CIDAS/clipseg-rd64-refined")
+clipseg_model = CLIPSegForImageSegmentation.from_pretrained("CIDAS/clipseg-rd64-refined")
+clipseg_model.eval()
 
-sam2_checkpoint = "../checkpoints/sam2.1_hiera_small.pt"
-model_cfg = "configs/sam2.1/sam2.1_hiera_s.yaml"
+def get_clipseg_mask(image_path, text_prompt):
+    """Generate a segmentation mask from CLIPSeg given an image and text prompt."""
+    image = Image.open(image_path).convert("RGB")
 
-sam2_model = build_sam2(model_cfg, sam2_checkpoint, device=device)
+    inputs = processor(text=text_prompt, images=[image] * len(text_prompt), return_tensors="pt")
+    inputs =inputs.to(device)
 
-predictor = SAM2ImagePredictor(sam2_model)
 
-
-# ------------------------------
-# 2. Prompt Encoder Network
-# ------------------------------
-class PromptEncoder(nn.Module):
-    def __init__(self, input_dim, embed_dim, num_prompts, points_per_prompt, freq_matrix):
+    with torch.no_grad():
+        """ Get the embeddings of the image and text.
+            the meaning is that the image and text are passed through the text and vision models and after that the pooled output pass throu the projection
+            layer to get the embeddings.
         """
-        Args:
-            input_dim (int): Dimension of the upsampled attention embedding from CLIPSeg.
-            embed_dim (int): Model embedding dimension (e.g., 256).
-            num_prompts (int): N, the number of prompt batches.
-            points_per_prompt (int): Np, the number of points per prompt.
-            freq_matrix (Tensor): Frequency matrix for DPE.
-        """
+        outputs = clipseg_model(**inputs)
+        heatmap_embds 
+    return heatmap_embds
+
+# Load SAM Model
+sam = sam_model_registry["vit_l"](checkpoint="sam_vit_l.pth").to(device)
+sam_predictor = SamPredictor(sam)
+
+
+def segment_with_sam(image_path, clipseg_mask):
+    """Use SAM to refine CLIPSeg-based segmentation."""
+    image = cv2.imread(image_path)
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    sam_predictor.set_image(image)
+
+    # Convert CLIPSeg mask into SAM's point prompt format
+    y, x = np.where(clipseg_mask > 0.5)  # Extract foreground points
+    input_points = np.array([[xi, yi] for xi, yi in zip(x, y)])
+
+    if len(input_points) == 0:
+        return None  # No detected object
+
+    with torch.no_grad():
+        masks, _, _ = sam_predictor.predict(point_coords=input_points, point_labels=np.ones(len(input_points)))
+
+    return masks[0]  # Return best segmentation mask
+
+
+# Define Adapter Model
+class AdapterNetwork(torch.nn.Module):
+    def __init__(self, embedding_dim=256):
         super().__init__()
-        self.num_prompts = num_prompts
-        self.points_per_prompt = points_per_prompt
-        self.embed_dim = embed_dim
-
-        # Project CLIPSeg embedding into our working dimension.
-        self.proj = nn.Linear(input_dim, embed_dim)
-        self.dpe = DensePositionalEncoding(embed_dim, freq_matrix)
-
-        # Single self-attention layer.
-        self.self_attn = nn.MultiheadAttention(embed_dim, num_heads=8, batch_first=True)
-        self.ln = nn.LayerNorm(embed_dim)
-
-        # MLP to filter/select viable query patches.
-        # Here we simply aggregate (via mean) the self-attended patches,
-        # then output num_prompts*points_per_prompt embeddings.
-        self.mlp = nn.Sequential(
-            nn.Linear(embed_dim, embed_dim),
-            nn.ReLU(),
-            nn.Linear(embed_dim, num_prompts * points_per_prompt * embed_dim)
+        self.projection = torch.nn.Linear(64, embedding_dim)  # Map CLIPSeg to SAM space
+        self.self_attention = torch.nn.MultiheadAttention(embedding_dim, num_heads=8, batch_first=True)
+        self.filtering_mlp = torch.nn.Sequential(
+            torch.nn.Linear(embedding_dim, embedding_dim),
+            torch.nn.ReLU(),
+            torch.nn.Linear(embedding_dim, embedding_dim)
         )
-        # A linear layer to mimic SAM’s labeling protocol.
-        self.label_linear = nn.Linear(embed_dim, embed_dim)
+        self.classifier = torch.nn.Linear(embedding_dim, 1)  # Binary classification
 
-    def forward(self, attn_embedding):
-        """
-        Args:
-            attn_embedding (Tensor): Upsampled attention embedding from CLIPSeg.
-                                     Shape: (B, H, W, input_dim)
-        Returns:
-            point_prompts: Tensor of shape (B, num_prompts, points_per_prompt, embed_dim)
-        """
-        B, H, W, _ = attn_embedding.shape
-        # Project and add positional encoding.
-        x = self.proj(attn_embedding)  # (B, H, W, embed_dim)
-        pos_enc = self.dpe((H, W)).to(x.device)  # (H, W, embed_dim)
-        x = x + pos_enc  # broadcast to (B, H, W, embed_dim)
+    def forward(self, clipseg_embedding):
+        x = self.projection(clipseg_embedding)
+        x, _ = self.self_attention(x, x, x)
+        x = self.filtering_mlp(x)
+        x = self.classifier(x)
+        return torch.sigmoid(x)  # Probability of keeping the mask
 
-        # Flatten spatial dimensions to sequence: (B, H*W, embed_dim)
-        x_flat = x.view(B, H * W, self.embed_dim)
-        # Self-attention over patches.
-        attn_out, _ = self.self_attn(x_flat, x_flat, x_flat)
-        attn_out = self.ln(attn_out + x_flat)
+# Instantiate Adapter
+adapter = AdapterNetwork().to(device)
+adapter.eval()
 
-        # Aggregate information (here, via global average pooling)
-        pooled = attn_out.mean(dim=1)  # (B, embed_dim)
-        # Generate queries for prompts: (B, num_prompts*points_per_prompt*embed_dim)
-        queries = self.mlp(pooled)
-        # Reshape to (B, num_prompts, points_per_prompt, embed_dim)
-        queries = queries.view(B, self.num_prompts, self.points_per_prompt, self.embed_dim)
-        # Apply a final linear transformation per point.
-        point_prompts = self.label_linear(queries)
-        return point_prompts
 
-# ------------------------------
-# 3. Mask Classification Network
-# ------------------------------
-class MaskClassifier(nn.Module):
-    def __init__(self, embed_dim, num_classes=2):
-        """
-        Args:
-            embed_dim (int): Embedding dimension.
-            num_classes (int): Number of classes (binary: foreground/background).
-        """
-        super().__init__()
-        # Projection MLP for point embeddings.
-        self.proj_mlp = nn.Sequential(
-            nn.Linear(embed_dim, embed_dim),
-            nn.ReLU(),
-            nn.Linear(embed_dim, embed_dim)
-        )
-        # Cross-attention: point embeddings (queries) attend to SAM mask tokens (keys/values).
-        self.cross_attn = nn.MultiheadAttention(embed_dim, num_heads=8, batch_first=True)
-        # Self-attention block for classifier tokens.
-        self.self_attn = nn.MultiheadAttention(embed_dim, num_heads=8, batch_first=True)
-        self.ln = nn.LayerNorm(embed_dim)
-        # Final MLP for binary classification.
-        self.classifier_mlp = nn.Sequential(
-            nn.Linear(embed_dim, embed_dim),
-            nn.ReLU(),
-            nn.Linear(embed_dim, num_classes)
-        )
+def full_pipeline(image_path, text_prompt):
+    """Full pipeline for CLIPSeg + SAM + Adapter"""
+    clipseg_mask = get_clipseg_mask(image_path, text_prompt)
+    sam_mask = segment_with_sam(image_path, clipseg_mask)
 
-    def forward(self, point_embeddings, mask_tokens, text_features=None):
-        """
-        Args:
-            point_embeddings (Tensor): From the prompt encoder.
-                                         Shape: (B, num_prompts, points_per_prompt, embed_dim)
-            mask_tokens (Tensor): Mask tokens from SAM’s decoder.
-                                  Shape: (B, num_masks, embed_dim)
-            text_features (Tensor, optional): Text-conditioned features.
-        Returns:
-            logits: Binary classification logits,
-                    shape: (B, num_prompts, points_per_prompt, num_classes)
-        """
-        B, num_prompts, points_per_prompt, embed_dim = point_embeddings.shape
-        # Flatten point embeddings to a sequence: (B, num_prompts * points_per_prompt, embed_dim)
-        queries = point_embeddings.view(B, num_prompts * points_per_prompt, embed_dim)
-        queries = self.proj_mlp(queries)
-        # Cross-attention: queries attend to mask tokens.
-        cross_out, _ = self.cross_attn(queries, mask_tokens, mask_tokens)
-        cross_out = self.ln(cross_out + queries)  # Residual connection
+    if sam_mask is None:
+        print("No object detected.")
+        return None
 
-        # Optionally, fuse in text features (e.g. via addition of a global text summary).
-        if text_features is not None:
-            text_summary = text_features.mean(dim=1, keepdim=True)  # (B, 1, embed_dim)
-            cross_out = cross_out + text_summary
+    sam_mask_tensor = torch.tensor(sam_mask).float().unsqueeze(0).to(device)
+    classification_score = adapter(sam_mask_tensor)
 
-        # Self-attention over the combined features.
-        self_attn_out, _ = self.self_attn(cross_out, cross_out, cross_out)
-        self_attn_out = self.ln(self_attn_out + cross_out)
+    if classification_score.item() > 0.5:
+        return sam_mask
+    else:
+        print("Filtered out low-confidence mask.")
+        return None
 
-        # Classify each point prompt.
-        logits = self.classifier_mlp(self_attn_out)  # (B, num_prompts*points_per_prompt, num_classes)
-        logits = logits.view(B, num_prompts, points_per_prompt, -1)
-        return logits
 
-# ------------------------------
-# 4. Adapter Module Combining Both Networks
-# ------------------------------
-class Adapter(nn.Module):
-    def __init__(self, attn_input_dim, embed_dim, num_prompts, points_per_prompt, freq_matrix, num_classes=2):
-        """
-        Args:
-            attn_input_dim (int): Dimension of the CLIPSeg attention embedding.
-            embed_dim (int): Common embedding dimension (e.g., 256).
-            num_prompts (int): N, number of prompt batches.
-            points_per_prompt (int): Np, number of points in each prompt.
-            freq_matrix (Tensor): Frequency matrix for DPE.
-            num_classes (int): Number of classification classes.
-        """
-        super().__init__()
-        self.prompt_encoder = PromptEncoder(attn_input_dim, embed_dim, num_prompts, points_per_prompt, freq_matrix)
-        self.mask_classifier = MaskClassifier(embed_dim, num_classes)
-
-    def forward(self, attn_embedding, mask_tokens, text_features=None):
-        """
-        Args:
-            attn_embedding (Tensor): Upsampled CLIPSeg attention embedding,
-                                     shape (B, H, W, attn_input_dim).
-            mask_tokens (Tensor): SAM mask tokens, shape (B, num_masks, embed_dim).
-            text_features (Tensor, optional): Text embeddings if available.
-        Returns:
-            logits: Classification logits for each prompt point.
-            point_prompts: The generated prompt embeddings.
-        """
-        point_prompts = self.prompt_encoder(attn_embedding)
-        logits = self.mask_classifier(point_prompts, mask_tokens, text_features)
-        return logits, point_prompts
-
-# ------------------------------
-# Example usage:
-# ------------------------------
 if __name__ == "__main__":
-    # Dummy dimensions and frequency matrix.
-    B, H, W = 2, 16, 16
-    attn_input_dim = 512    # Example dimension from CLIPSeg's attention map.
-    embed_dim = 256
-    num_prompts = 4
-    points_per_prompt = 10
-    num_masks = 8
-    num_classes = 2
+    image_path = "test.jpg"
+    text_prompt = ["acable"]
 
-    # Create a fixed frequency matrix (e.g., 32 frequencies)
-    K = 32
-    freq_matrix = torch.randn(K, 2)
-
-    # Dummy inputs.
-    attn_embedding = torch.randn(B, H, W, attn_input_dim)
-    mask_tokens = torch.randn(B, num_masks, embed_dim)
-    text_features = torch.randn(B, 77, embed_dim)  # e.g., from a CLIP text encoder
-
-    # Instantiate adapter.
-    adapter = Adapter(attn_input_dim, embed_dim, num_prompts, points_per_prompt, freq_matrix, num_classes)
-    logits, prompts = adapter(attn_embedding, mask_tokens, text_features)
-
-    print("Logits shape:", logits.shape)      # Expected: (B, num_prompts, points_per_prompt, num_classes)
-    print("Prompts shape:", prompts.shape)      # Expected: (B, num_prompts, points_per_prompt, embed_dim)
+    segmentation_result = full_pipeline(image_path, text_prompt)
+    
+    if segmentation_result is not None:
+        plt.imshow(segmentation_result, cmap="gray")
+        plt.title("Final Segmentation Result")
+        plt.show()
