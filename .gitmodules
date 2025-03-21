@@ -1,3 +1,6 @@
 [submodule "src/sam2_realtime"]
 	path = src/sam2_realtime
 	url = https://github.com/zdata-inc/sam2_realtime
+[submodule "src/Grounded-SAM-2"]
+	path = src/Grounded-SAM-2
+	url = https://github.com/IDEA-Research/Grounded-SAM-2

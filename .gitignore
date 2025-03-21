@@ -11,11 +11,19 @@ src/sam2_rt/__pycache__/
 *.egg*
 build/*
 _C.*
-src/sam2_realtime/outputs/*
-src/sam2_realtime/checkpoints/*.pt
-src/sam2_realtime/notebooks/
-src/sam2_realtime/demo/
-src/sam2_realtime/sav/
+# src/sam2_realtime/outputs/*
+# src/sam2_realtime/checkpoints/*.pt
+# src/sam2_realtime/notebooks/
+# src/sam2_realtime/demo/
+# src/sam2_realtime/sav/
 
 # clipseg 
 src/clipseg/weights/
+
+
+src/dloseg/dataset/
+src/dloseg/__pycache__
+
+pyzed-4.2-cp310-cp310-linux_x86_64.whl
+
+src/zed/record/recordings

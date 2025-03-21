@@ -45,7 +45,7 @@ class SAM2Wrapper:
     @property
     def decoder(self):
         """Get the mask decoder"""
-        return self.sam2_model.mask_decoder
+        return self.sam2_model.sam_mask_decoder
     
     @property
     def positional_encoding_gaussian_matrix(self):
@@ -74,11 +74,11 @@ class SAM2Wrapper:
         """Encode prompts using the prompt encoder"""
         return self.prompt_encoder(points=points, boxes=boxes, masks=masks)
     
-    def get_image_embeddings(self):
-        """Get the current image embeddings from the predictor"""
-        if self.predictor._features is None:
-            raise ValueError("No image has been set. Call set_image() first.")
-        return self.predictor._features["image_embed"]
+    # def get_image_embeddings(self):
+    #     """Get the current image embeddings from the predictor"""
+    #     if self.predictor._features is None:
+    #         raise ValueError("No image has been set. Call set_image() first.")
+    #     return self.predictor._features["image_embed"]
 
     def decode_masks(self, image_embeddings, sparse_embeddings, dense_embeddings):
         """Use the decoder to generate masks from embeddings"""
@@ -86,6 +86,7 @@ class SAM2Wrapper:
             image_embeddings=image_embeddings,
             image_pe=dense_embeddings,
             sparse_prompt_embeddings=sparse_embeddings,
+            
             multimask_output=True,
         )
         
