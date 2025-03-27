@@ -31,11 +31,13 @@ class Dlo_skeletonize:
         self.ends = None
         
         
-    def set_image(self, mask,blur_size=5):
+    def set_image(self, mask,blur_size=5,method='medial_axis'):
         
         self.image = mask # [H, W]
+        # padd the image to avoid border issues
+        mask = cv2.copyMakeBorder(mask, 2, 2, 2, 2, borderType=cv2.BORDER_CONSTANT, value=0)
         self.blurred_image = cv2.blur(mask, (blur_size, blur_size))
-        self.skeleton, self.distance = get_skeleton_from_mask(mask,method='medial_axis')
+        self.skeleton, self.distance = get_skeleton_from_mask(mask,method=method)
         
     def _set_params(self):
         self.delta = self.distance.max() * 2
@@ -50,11 +52,12 @@ class Dlo_skeletonize:
             tuple[np.ndarray, np.ndarray]: Arrays of endpoints and intersections.
         """
         # Use cv2.copyMakeBorder to pad the image with zeros
-        padded_img = cv2.copyMakeBorder(self.skeleton, 1, 1, 1, 1, borderType=cv2.BORDER_CONSTANT, value=0)
+        padded_img = cv2.copyMakeBorder(np.asarray(self.skeleton), 1, 1, 1, 1, borderType=cv2.BORDER_CONSTANT, value=0)
         
         # Apply the convolution filter with explicit border handling to keep consistency
-        res = cv2.filter2D(src=padded_img, ddepth=-1, kernel=self.end_point_kernel, borderType=cv2.BORDER_CONSTANT)
-        
+        # res = cv2.filter2D(src=padded_img, ddepth=-1, kernel=self.end_point_kernel, borderType=cv2.BORDER_CONSTANT)
+        # Apply convolution
+        res = cv2.filter2D(padded_img, -1, self.end_point_kernel)
         # Endpoints: combine conditions where the result equals 10 or 11
         self.ends = np.argwhere((res == 10) | (res == 11)) - 1
         # Intersections: pixels with a result greater than 12
@@ -83,9 +86,19 @@ class Dlo_skeletonize:
         
         # Set branch length threshold: use self.branch_threshold if defined, else default to 10.
         branch_threshold = getattr(self, 'delta', 10)
+        np_intersections = np.asarray(self.intersections)
+        # Cluster adjacent intersection pixels using DBSCAN.
+        self.adjacent_pixel_clusterer.fit(np_intersections)
+        temp_intersections = []
+        for label in np.unique(self.adjacent_pixel_clusterer.labels_):
+            # Average the pixels in each cluster and round to uint16.
+            cluster_mean = np.round(np.mean(np_intersections[self.adjacent_pixel_clusterer.labels_ == label], axis=0))
+            temp_intersections.append(tuple(cluster_mean.astype(np.uint16)))
+        # temp_intersections = temp_intersections
+        
         # Convert intersections and endpoints arrays into sets of tuples for fast membership testing.
-        intersections_set = {tuple(coord) for coord in self.intersections}
-        ends_set = {tuple(coord) for coord in self.ends}
+        intersections_set = {tuple(coord) for coord in temp_intersections}
+        # ends_set = {tuple(coord) for coord in self.ends}
         
         interactions_pruned = []
         ends_pruned = []
@@ -123,7 +136,7 @@ class Dlo_skeletonize:
                 branchs.append(branch_pixels)
             
             if not any(branchs_to_prune) :                    
-                nb = [tuple(p) for p in nb if tuple(p) != prev]
+                nb = [tuple(p) for p in nb if tuple(p) != tuple(prev)]
                 interactions_pruned.append(tuple(list(inter)))
             
             # Prune the branch if its length is below the threshold.
@@ -136,10 +149,10 @@ class Dlo_skeletonize:
                 if all(branchs_to_prune):
                     self.skeleton[inter[0], inter[1]] = 0
 
-        for end in ends_set:
-            branch_pixels = [end]
-            current = end
-            prev = end
+        for end in self.ends:
+            branch_pixels = [tuple(end)]
+            current = tuple(end)
+            prev = tuple(end)
             prune = True
             while True:
                 nb = get_neighbors_global( self.skeleton,current)
@@ -156,9 +169,6 @@ class Dlo_skeletonize:
                 else:
                     if len(branch_pixels) > branch_threshold:
                         prune = False
-                    break
-                if len(branch_pixels) > branch_threshold:
-                    prune = False
                     break
             if prune:
                 for x, y in branch_pixels:
@@ -194,35 +204,24 @@ class Dlo_skeletonize:
                 "matches": List of matched Y-branch pairs (coordinates).
         """
         # Initialize temporary lists and dictionaries to store results.
-        temp_intersections = []  # Averaged intersection points from each DBSCAN cluster.
+
         correct_intersections = []  # Already correct intersections (X-shaped).
         Y_intersections = {"inter": [], "ends": []}  # Y-intersections needing matching.
         new_intersections = {"inter": [], "ends": [],"matches": []}  # New intersections from matching Y-branches.
-        np_intersections = np.asarray(self.intersections)
-        # --- Phase 1: Clustering via DBSCAN ---
-        # Cluster adjacent intersection pixels.
-        self.adjacent_pixel_clusterer.fit(np_intersections)
-        
-        for label in np.unique(self.adjacent_pixel_clusterer.labels_):
-            # Average the pixels in each cluster and round to uint16.
-            cluster_mean = np.round(np.mean(np_intersections[self.adjacent_pixel_clusterer.labels_ == label], axis=0))
-            temp_intersections.append(cluster_mean.astype(np.uint16))
-        temp_intersections = np.asarray(temp_intersections)
-
 
         # --- Phase 2: Matching Y-intersections via Pairwise Distances ---
-        for x, y in temp_intersections:
+        for inter in self.intersections:
             
             # figure out if the intersection is Y or X
-            nb = get_neighbors_global(img=self.skeleton, pixel_coord=(x,y))
+            nb = get_neighbors_global(img=self.skeleton, pixel_coord=inter)
             
             if len(nb[:,0]) == 4:
                 # 4 neighbors: likely an X-intersection.
-                correct_intersections.append((x, y))
+                correct_intersections.append(inter)
                 continue
             elif len(nb[:,0]) == 3:
                 # 3 neighbors: likely a Y-intersection.
-                Y_intersections["inter"].append((x, y))
+                Y_intersections["inter"].append(inter)
                 continue
             else:
                 # Not a valid intersection, skip it.
@@ -230,15 +229,24 @@ class Dlo_skeletonize:
         # Convert the list of Y-intersection coordinates to an array for easier manipulation.
         Y_intersections_np = np.asarray(Y_intersections["inter"])
         num_Y_intersections = Y_intersections_np.shape[0]
-
+        dist_matrix = distance_matrix(Y_intersections_np, Y_intersections_np)
         matching_arr = []  # Will hold all possible pairs and their distances.
-        # Create all possible pairs of Y-intersections and compute the Euclidean distance between them.
-        for i in range(num_Y_intersections):
-            p1 = Y_intersections_np[i].astype(float)
-            for j in range(i + 1, num_Y_intersections):
-                p2 = Y_intersections_np[j].astype(float)
-                distance = np.linalg.norm(p1 - p2)
-                matching_arr.append([i, j, distance]) # [Y_intersection index 1, Y_intersection index 2, distance]
+        
+
+        for i in range(dist_matrix.shape[0]):
+            # i is the row
+            for j in range(dist_matrix.shape[1]):
+                # j is the column
+                if i != j and j > i:
+                    matching_arr.append([i,j,dist_matrix[i,j]])
+        
+        # # Create all possible pairs of Y-intersections and compute the Euclidean distance between them.
+        # for i in range(num_Y_intersections):
+        #     p1 = Y_intersections_np[i].astype(float)
+        #     for j in range(i + 1, num_Y_intersections):
+        #         p2 = Y_intersections_np[j].astype(float)
+        #         distance = np.linalg.norm(p1 - p2)
+        #         matching_arr.append([i, j, distance]) # [Y_intersection index 1, Y_intersection index 2, distance]
 
         # Sort pairs by distance in descending order (so we can pop the smallest distance pair).
         matching_arr.sort(key=lambda pair: pair[2], reverse=True)
@@ -260,9 +268,9 @@ class Dlo_skeletonize:
         
             # Compute the new endpoints as the average of the two matched endpoints.
             # Extract a local window shpae n=window_size*2+1 (n,n) around the averaged intersection.
-            window_size = 5
+            window_size = 7
             # Get boundary pixels in the window and reshape them into coordinate pairs.
-            boundary_global = get_boundary_pixels_in_global_frame(skeleton=self.skeleton,window_size=window_size,inter=new_inter)
+            boundary_global = get_boundary_edges_global(skeleton=self.skeleton,window_size=window_size,inter=tuple(new_inter))
             # add the new endpoints to ends 
             self.ends.extend(boundary_global)
             
@@ -280,7 +288,8 @@ class Dlo_skeletonize:
         # Any remaining unmatched Y-intersections are added to the correct intersections list.
         for i in available_nodes:
             correct_intersections.append(Y_intersections["inter"][i])
-        self.intersections = correct_intersections
+        self.intersections = []
+        self.intersections.extend(correct_intersections)
         self.intersections.extend(new_intersections["inter"])
         
         return correct_intersections, new_intersections
@@ -320,7 +329,7 @@ class Dlo_skeletonize:
             while True:
                 # Extend the current path by traversing from the current pixel.
                 # traverse_skeleton() returns an iterable of pixels along the branch.
-                path.extend(list(traverse_skeleton(self.skeleton, curr_pixel)))
+                path.extend(traverse_skeleton(self.skeleton, curr_pixel))
                 
                 # Get the last pixel in the current path and create an identifier string (e.g., "3,5")
                 p_x, p_y = path[-1]
@@ -544,7 +553,7 @@ class Dlo_skeletonize:
             if handled_areas[x, y]:
                 continue
 
-            boundary_global = get_boundary_pixels_in_global_frame(skeleton=self.skeleton,window_size=k_size,inter=inter)
+            boundary_global = get_boundary_edges_global(skeleton=self.skeleton,window_size=k_size,inter=inter)
             best_paths = self._compute_minimal_bending_energy_paths(boundary_global, np.asarray(inter))
             
             if not best_paths:
@@ -737,7 +746,7 @@ class Dlo_skeletonize:
                 cv2.circle(path_img, (y - 1, x - 1), path_radii_avgs[p_id], color, -1)
 
         return path_img
-    def visualize_keypoints(self):
+    def visualize_keypoints(self,if_ends=True,if_intersections=True):
         """
         Visualize the skeleton with colored keypoints for easier analysis.
         
@@ -761,15 +770,16 @@ class Dlo_skeletonize:
         # Set skeleton pixels to white
         colored_skeleton[self.skeleton > 0] = [255, 255, 255]
 
-        # Color endpoints in green
-        for end in self.ends:
-            x, y = end
-            colored_skeleton[x, y] = [0, 255, 0]  # Green in BGR
-
-        # Color intersections in blue
-        for inter in self.intersections:
-            x, y = inter
-            colored_skeleton[x, y] = [0, 0, 255]  # Blue in BGR
+        if if_ends:
+            # Color endpoints in green
+            for end in self.ends:
+                x, y = end
+                colored_skeleton[x, y] = [0, 255, 0]  # Green in BGR
+        if if_intersections:
+            # Color intersections in blue
+            for inter in self.intersections:
+                x, y = inter
+                colored_skeleton[x, y] = [0, 0, 255]  # Blue in BGR
 
         # Display the colored skeleton
         plt.figure()
@@ -788,7 +798,7 @@ if __name__ == '__main__':
     # plt.show()
     start_time = time.time()
     dlo_skel = Dlo_skeletonize()
-    dlo_skel.set_image(mask)
+    dlo_skel.set_image(mask,method='skimage')
 
     dlo_skel._set_params()
     
@@ -796,7 +806,7 @@ if __name__ == '__main__':
     # print(ends)
     # print(interactions)
     
-    # dlo_skel.visualize_keypoints()
+    # dlo_skel.visualize_keypoints(if_ends=True,if_intersections=True)
 
     # ends_pruned, interactions_pruned,skeleton_pruned =dlo_skel._prune_split_ends(skeleton, ends, interactions)
     dlo_skel._prune_split_ends_from_inerections()

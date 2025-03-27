@@ -3,7 +3,55 @@ from skimage.morphology import skeletonize, medial_axis , thin
 import matplotlib.pyplot as plt
 import cv2
 import time
+# TODO: transform coordinates to global coordinates
+def get_boundary_edges_local(graph):
+    graph[1 : - 1, 1 : - 1] = 0
 
+    edges = np.where(graph == 1)
+    new_edges = []
+    for edge in zip(*edges):
+        new_edges.append(edge)
+    # print(new_edges)
+    new_edges = np.asarray(new_edges)
+
+    best_edges = []
+    # top row
+    best_indx = np.where(new_edges[:,0] == 0)[0]
+    best_edges.extend(new_edges[[best_indx[0], best_indx[-1]]])
+    # bottom row
+    best_indx = np.where(new_edges[:,0] == 14)[0]
+    best_edges.extend(new_edges[[best_indx[0], best_indx[-1]]])
+    # left column
+    best_indx = np.where(new_edges[:,1] == 0)[0]
+    if len(best_indx) > 1:
+        best_edges.extend(new_edges[[best_indx[0], best_indx[-1]]])
+
+    # # right column
+    best_indx = np.where(new_edges[:,1] == 14)[0]
+    if len(best_indx) > 1:
+        best_edges.extend(new_edges[[best_indx[0], best_indx[-1]]])
+
+    best_edges = [tuple(x) for x in best_edges ]
+    best_edges = list(set(best_edges))
+    
+    return best_edges[:4]
+
+def get_boundary_edges_global(skeleton: np.ndarray, window_size: int, inter: tuple[int,int]):
+    
+    
+    boundary_global = []
+    # make sure the window size is odd
+    assert window_size % 2 == 1, "window size should be odd"
+    # Get the bounding box of the mask
+    window = skeleton[inter[0]-window_size:inter[0] + window_size + 1, inter[1] - window_size:inter[1] + window_size + 1].copy()
+    
+    boundary_local = get_boundary_edges_local(window)
+    
+    # convert the local coordinates to global coordinates  
+    for pixel in boundary_local:
+        global_pixel = (pixel[0] + inter[0] - window_size, pixel[1] + inter[1] - window_size)
+        boundary_global.append(global_pixel)
+    return boundary_global
 def get_boundary_pixels_in_global_frame(skeleton: np.ndarray, window_size: int, inter: tuple[int,int]) -> np.ndarray:
     """
     Get boundary pixels specifically set to 1 in the mask.
@@ -115,13 +163,19 @@ def get_skeleton_from_mask(mask: np.ndarray , method='skimage') -> np.ndarray:
     
     if method == 'skimage':
         # Zhang-Suen thinning algorithm
-        return skeletonize(mask,method='zhang').astype(np.uint8)
+        skeleton = skeletonize(mask, method='zhang').astype(np.uint8)
     elif method == 'medial_axis':
         # Medial axis skeletonization
-        skel, distance = medial_axis(mask, return_distance=True)
-        return skel.astype(np.uint8), distance
+        skeleton, distance = medial_axis(mask, return_distance=True)
     elif method == 'thin':
-        return thin(mask).astype(np.uint8)
+        skeleton = thin(mask)
+    # compute the distance transform
+    elif method == 'opencv':
+        # OpenCV skeletonization
+        skeleton = cv2.ximgproc.thinning(mask)
+    # Compute the distance transform
+    distance = cv2.distanceTransform(mask.astype(np.uint8), cv2.DIST_L2, 5)
+    return skeleton.astype(np.uint8) , distance
 
 
 def visualize_keypoints( skeleton, endpoints, intersections):
@@ -369,7 +423,7 @@ def get_neighbors_global(img:np.ndarray,pixel_coord:tuple[int, int]) -> list[tup
     
     return neighbors_global
 
-def traverse_skeleton(skeleton: np.ndarray, current_pixel: tuple[int,int]) -> np.ndarray:
+def traverse_skeleton(skeleton: np.ndarray, current_pixel: tuple[int,int]) -> list[tuple[int,int]]:
     """
     Traverse a skeleton image starting at curr_pixel until no neighbor is found.
 
@@ -402,7 +456,7 @@ def traverse_skeleton(skeleton: np.ndarray, current_pixel: tuple[int,int]) -> np
             current_pixel = next_nb[0]
 
     # Convert the path list to a NumPy array and return it.
-    return np.array(path, dtype=np.int16)
+    return path
 
 
 
