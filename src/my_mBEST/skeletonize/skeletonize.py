@@ -32,13 +32,27 @@ class Dlo_skeletonize:
         """
         Extracts the boundary pixels from an inner region of the given binary mask.
         
-        The function works as follows:
-        1. Extracts the inner region of the mask (excluding the outer border).
-        2. Zeros out the interior of that inner region so that only its boundary remains.
-        3. Finds all nonzero (boundary) pixel coordinates.
-        4. Iterates over these coordinates and removes pixels that meet a certain condition,
-            based on the sum of values in a 3x3 neighborhood in both the modified inner mask and 
-            the original mask.
+        # Apply the convolution filter with explicit border handling to keep consistency
+        res = cv2.filter2D(src=padded_img, ddepth=-1, kernel=self.end_point_kernel, borderType=cv2.BORDER_CONSTANT)
+        
+        # Endpoints: combine conditions where the result equals 10 or 11
+        self.ends = np.argwhere((res == 10) | (res == 11)) - 1
+        # Intersections: pixels with a result greater than 12
+        self.intersections = np.argwhere(res > 12) - 1
+        # Convert to uint16 for consistency
+        self.ends = self.ends.astype(np.uint8)
+        self.intersections = self.intersections.astype(np.uint8)
+
+    def _prune_split_ends_from_inerections(self, skeleton: np.ndarray, ends: np.ndarray, intersections: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Prune noisy branch segments from a skeletonized image and update the endpoints and intersections.
+        
+        The function starts at each intersection and follows each branch until either:
+        - It reaches an endpoint (no more connected neighbors), or
+        - It encounters another intersection.
+        
+        If the branch length is below a given threshold, the branch is pruned (removed from the skeleton).
+        If all branches emerging from an intersection are pruned, then the intersection itself is pruned.
         
         Parameters:
             mask (np.ndarray): A 2D binary array representing the mask.
