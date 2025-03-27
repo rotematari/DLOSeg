@@ -31,3 +31,4 @@ yapf
 numpy<2.0
 supervision>=0.22.0
 pycocotools
+wand
