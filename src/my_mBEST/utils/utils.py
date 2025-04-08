@@ -17,18 +17,28 @@ def get_boundary_edges_local(graph):
     best_edges = []
     # top row
     best_indx = np.where(new_edges[:,0] == 0)[0]
-    best_edges.extend(new_edges[[best_indx[0], best_indx[-1]]])
+    if len(best_indx) == 1:
+        best_edges.append(new_edges[best_indx[0]])
+    elif len(best_indx) > 0:
+        best_edges.extend(new_edges[[best_indx[0], best_indx[-1]]])
     # bottom row
     best_indx = np.where(new_edges[:,0] == 14)[0]
-    best_edges.extend(new_edges[[best_indx[0], best_indx[-1]]])
+    if len(best_indx) == 1:
+        best_edges.append(new_edges[best_indx[0]])
+    elif len(best_indx) > 0:
+        best_edges.extend(new_edges[[best_indx[0], best_indx[-1]]])
     # left column
     best_indx = np.where(new_edges[:,1] == 0)[0]
-    if len(best_indx) > 1:
+    if len(best_indx) == 1:
+        best_edges.append(new_edges[best_indx[0]])
+    elif len(best_indx) > 1:
         best_edges.extend(new_edges[[best_indx[0], best_indx[-1]]])
 
     # # right column
     best_indx = np.where(new_edges[:,1] == 14)[0]
-    if len(best_indx) > 1:
+    if len(best_indx) == 1:
+        best_edges.append(new_edges[best_indx[0]])
+    elif len(best_indx) > 1:
         best_edges.extend(new_edges[[best_indx[0], best_indx[-1]]])
 
     best_edges = [tuple(x) for x in best_edges ]
@@ -413,6 +423,7 @@ def get_neighbors_global(img:np.ndarray,pixel_coord:tuple[int, int]) -> list[tup
         list[tuple[int, int]]: List of neighbor coordinates (x, y).
     """
     # Extract the 3x3 neighborhood around the pixel_coord
+    
     croped_img = img[pixel_coord[0] - 1:pixel_coord[0] + 2, pixel_coord[1] - 1: pixel_coord[1] + 2]
     if croped_img.shape != (3, 3):
         return []
@@ -444,17 +455,24 @@ def traverse_skeleton(skeleton: np.ndarray, current_pixel: tuple[int,int]) -> li
         np.ndarray: A 2D array (shape (num_steps, 2)) containing the global coordinates of the traversed path.
     """
     path = [current_pixel]
+    prev = current_pixel
     while True:
          # travers the branch
         next_nb = get_neighbors_global(skeleton,current_pixel)
+        # remove the previous pixel from the neighbors
+        next_nb = [tuple(x) for x in next_nb if tuple(x) != tuple(prev)]
         # Check if any neighbor is found
-        if len(next_nb[0]) == 0:
+        if len(next_nb) == 0:
             break
                 # one neighbor found keep traversing
-        elif len(next_nb[0]) == 1:
+        elif len(next_nb) == 1:
             path.append(next_nb[0])
+            prev = current_pixel
             current_pixel = next_nb[0]
-
+        else:
+            # more than one neighbor found, intersection reached
+            print("intersection found at", current_pixel)
+            break
     # Convert the path list to a NumPy array and return it.
     return path
 

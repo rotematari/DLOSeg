@@ -4,6 +4,4 @@
 [submodule "src/Grounded-SAM-2"]
 	path = src/Grounded-SAM-2
 	url = https://github.com/IDEA-Research/Grounded-SAM-2
-[submodule "src/DLO-perception-pipeline"]
-	path = src/DLO-perception-pipeline
-	url = https://github.com/TheGoblinTechies/DLO-perception-pipeline.git
+

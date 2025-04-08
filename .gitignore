@@ -1,8 +1,11 @@
 .venv/
 log/
 *.egg*
-
-
+*.pyc
+*.whl
+*.npy
+*.pkl
+*.pt
 archive/
 
 

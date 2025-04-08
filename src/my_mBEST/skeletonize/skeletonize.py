@@ -135,20 +135,22 @@ class Dlo_skeletonize:
                         break
                 branchs.append(branch_pixels)
             
-            if not any(branchs_to_prune) :                    
-                nb = [tuple(p) for p in nb if tuple(p) != tuple(prev)]
-                interactions_pruned.append(tuple(list(inter)))
+            # if not any(branchs_to_prune) :                    
+            #     # nb = [tuple(p) for p in nb if tuple(p) != tuple(prev)]
+            #     interactions_pruned.append(tuple(list(inter)))
             
             # Prune the branch if its length is below the threshold.
             for i,branch in enumerate(branchs):
                 if branchs_to_prune[i]:
                     for x, y in branch:
                         self.skeleton[x, y] = 0
-
-                # if all the branches are pruned, remove the intersection itself.
-                if all(branchs_to_prune):
-                    self.skeleton[inter[0], inter[1]] = 0
-
+            # if all the branches are pruned, remove the intersection itself.
+            neighbors = get_neighbors_global(img=self.skeleton,pixel_coord=inter) 
+            if all(branchs_to_prune) or neighbors.shape[0] == 2:
+                self.skeleton[inter[0], inter[1]] = 0
+            else:
+                interactions_pruned.append(tuple(list(inter)))
+            
         for end in self.ends:
             branch_pixels = [tuple(end)]
             current = tuple(end)
@@ -240,14 +242,6 @@ class Dlo_skeletonize:
                 if i != j and j > i:
                     matching_arr.append([i,j,dist_matrix[i,j]])
         
-        # # Create all possible pairs of Y-intersections and compute the Euclidean distance between them.
-        # for i in range(num_Y_intersections):
-        #     p1 = Y_intersections_np[i].astype(float)
-        #     for j in range(i + 1, num_Y_intersections):
-        #         p2 = Y_intersections_np[j].astype(float)
-        #         distance = np.linalg.norm(p1 - p2)
-        #         matching_arr.append([i, j, distance]) # [Y_intersection index 1, Y_intersection index 2, distance]
-
         # Sort pairs by distance in descending order (so we can pop the smallest distance pair).
         matching_arr.sort(key=lambda pair: pair[2], reverse=True)
 
@@ -272,7 +266,7 @@ class Dlo_skeletonize:
             # Get boundary pixels in the window and reshape them into coordinate pairs.
             boundary_global = get_boundary_edges_global(skeleton=self.skeleton,window_size=window_size,inter=tuple(new_inter))
             # add the new endpoints to ends 
-            self.ends.extend(boundary_global)
+            # self.ends.extend(boundary_global)
             
             # Adjust local endpoint coordinates to match the full image space.
             new_intersections["ends"].append(boundary_global)
@@ -303,10 +297,6 @@ class Dlo_skeletonize:
         
         Parameters:
             skeleton (np.ndarray): A binary (or otherwise labeled) image representing the skeleton.
-            ends (np.ndarray): An array of endpoints (coordinates) from which to start path tracing.
-            intersection_paths (dict): A dictionary where keys are intersection identifiers (formatted
-                as "x,y") and values are precomputed paths (iterables of pixel coordinates) to follow.
-        
         Returns:
             paths (list): A list of NumPy arrays, each representing a traced path (with an offset of -1 applied).
             intersection_path_id (dict): A mapping from intersection key (str "x,y") to a unique path ID.
@@ -339,21 +329,22 @@ class Dlo_skeletonize:
                 if pixel_id in intersection_paths:
                     # If this intersection was already visited, a cycle exists; finalize the path.
                     if pixel_id in visited_intersections:
-                        paths.append(np.asarray(path) - 1)  # subtract 1 for offset correction
+                        paths.append(path) 
                         break
                     # Mark this intersection as visited.
                     visited_intersections.add(pixel_id)
                     # Append the precomputed intersection path to the current path.
-                    path.extend(list(intersection_paths[pixel_id]))
+                    
+                    path.extend([tuple(p) for p in intersection_paths[pixel_id]])
                     # Update the current pixel to the last point of the appended intersection path.
-                    curr_pixel = np.array([path[-1][0], path[-1][1]], dtype=np.int16)
+                    curr_pixel = path[-1]
                     # Record the current path ID for this intersection.
                     intersection_path_id[pixel_id] = path_id
                     # Continue traversing from the updated current pixel.
                     continue
                 else:
                     # No intersection found – the current branch has ended.
-                    paths.append(np.asarray(path) - 1)  # Finalize this path with an offset of -1.
+                    paths.append(path) 
                     # Remove the final endpoint from the list to avoid re-traversal in the opposite direction.
                     remove_from_array(endpoints, path[-1])
                     break  # Exit the inner while loop for this path
@@ -746,6 +737,29 @@ class Dlo_skeletonize:
                 cv2.circle(path_img, (y - 1, x - 1), path_radii_avgs[p_id], color, -1)
 
         return path_img
+    
+    def _plot_path(self,path:list[tuple[int,int]])->np.ndarray:
+        """
+        Plot a single path on a blank image.
+        
+        Parameters
+        ----------
+        path : list of tuple
+            List of (x, y) coordinates representing the path.
+        
+        Returns
+        -------
+        numpy.ndarray
+            Image with the plotted path.
+        """
+        # Create a blank image (same size as self.image) to draw the paths.
+        path_img = np.zeros_like(self.image)
+        
+        # Draw the path on the blank image.
+        for x, y in path:
+            cv2.circle(path_img, (y, x), 4, [255, 0, 0], -1)
+        
+        return path_img
     def visualize_keypoints(self,if_ends=True,if_intersections=True):
         """
         Visualize the skeleton with colored keypoints for easier analysis.
@@ -791,46 +805,67 @@ class Dlo_skeletonize:
 
 if __name__ == '__main__':
     
-    mask = cv2.imread('/home/admina/segmetation/DLOSeg/src/my_mBEST/skeletonize/mask.png', cv2.IMREAD_GRAYSCALE)
+    mask = cv2.imread('/home/admina/segmetation/DLOSeg/outputs/grounded_sam2_local_demo/groundingdino_mask_0.png', cv2.IMREAD_GRAYSCALE)
     mask = mask/255
     mask = mask.astype(np.uint16)
+    # plt.figure()
     # plt.imshow(mask, cmap='gray')
     # plt.show()
-    start_time = time.time()
+    
     dlo_skel = Dlo_skeletonize()
+    full_start_time = time.time()
+    start_time = time.time()
     dlo_skel.set_image(mask,method='skimage')
-
+    end_time = time.time()
+    print("Time taken to set image: ", end_time - start_time, " seconds")
     dlo_skel._set_params()
-    
+    start_time = time.time()
     dlo_skel._detect_keypoints()
-    # print(ends)
-    # print(interactions)
-    
-    # dlo_skel.visualize_keypoints(if_ends=True,if_intersections=True)
+    end_time = time.time()
+    print("Time taken to detect keypoints: ", end_time - start_time, " seconds")
+    # dlo_skel.visualize_keypoints()
 
     # ends_pruned, interactions_pruned,skeleton_pruned =dlo_skel._prune_split_ends(skeleton, ends, interactions)
     dlo_skel._prune_split_ends_from_inerections()
-    # dlo_skel.visualize_keypoints()
+    dlo_skel.visualize_keypoints()
 
     if len(dlo_skel.intersections) > 0:
-        
+        start_time = time.time()
         correct_intersections, new_intersections =dlo_skel._cluster_and_match_intersections()
-        
+        end_time = time.time()
+        print("Time taken to cluster and match intersections: ", end_time - start_time, " seconds")
         
         dlo_skel.visualize_keypoints()
+        start_time = time.time()
         intersection_paths, crossing_orders = dlo_skel._generate_intersection_paths(correct_intersections, new_intersections)
-        
-        
-        paths, intersection_path_id = dlo_skel._generate_paths(intersection_paths)
-        
-        
-        path_radii = dlo_skel._compute_radii(paths)
-        
-        path_img = dlo_skel._plot_paths(paths, intersection_paths, intersection_path_id,
-                            crossing_orders, path_radii, intersection_color=[255, 0, 0])
         end_time = time.time()
-        print("Time taken to process: ", end_time - start_time, " seconds")
-        plt.imshow(path_img)
+        print("Time taken to generate intersection paths: ", end_time - start_time, " seconds")
+        
+        start_time = time.time()
+        paths, intersection_path_id = dlo_skel._generate_paths(intersection_paths)
+        end_time = time.time()
+        print("Time taken to generate paths: ", end_time - start_time, " seconds")
+        
+        # path_radii = dlo_skel._compute_radii(paths)
+        
+        # path_img = dlo_skel._plot_paths(paths, intersection_paths, intersection_path_id,
+        #                     crossing_orders, path_radii, intersection_color=[255, 0, 0])
+        end_time = time.time()
+        print("Time taken to process: ", end_time - full_start_time, " seconds")
+        path_img_1_np = np.asarray(paths[0])
+        np.save('path_img_1.npy', path_img_1_np)
+        path_img_2_np = np.asarray(paths[1])
+        np.save('path_img_2.npy', path_img_2_np)
+        for path in paths:
+            path_img = dlo_skel._plot_path(path)
+            plt.figure()
+            plt.imshow(path_img)
+        # path_img_1 = dlo_skel._plot_path(paths[0])
+        # path_img_2 = dlo_skel._plot_path(paths[1])
+        # plt.figure()
+        # plt.imshow(path_img_1)
+        # plt.figure()
+        # plt.imshow(path_img_2)
         plt.show()
     # cv2.imwrite('skeleton.png', skeleton)
     # cv2.waitKey(0)
