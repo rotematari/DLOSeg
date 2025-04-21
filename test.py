@@ -1,115 +1,215 @@
+import networkx as nx
 import numpy as np
+import math
+from sklearn.cluster import DBSCAN
+from scipy.spatial.distance import euclidean
 
-import numpy as np
-
-import numpy as np
-
-def get_extreme_points_hv(mask: np.ndarray) -> list[tuple[int, int]]:
+def simplify_intersections_fast_2(G: nx.Graph, dist_threshold=1.0) -> nx.Graph:
     """
-    Finds the coordinates of extreme '1' pixels based on row and column extents.
+    Simplifies a graph by clustering nodes based on proximity and representing
+    each cluster with its most central node (closest to the geometric centroid).
 
-    Specifically, it finds:
-    - Leftmost and rightmost '1's in the overall topmost row with '1's.
-    - Leftmost and rightmost '1's in the overall bottommost row with '1's.
-    - Topmost and bottommost '1's in the overall leftmost column with '1's.
-    - Topmost and bottommost '1's in the overall rightmost column with '1's.
+    Steps:
+    1. Extract node positions and filter nodes without 'x' or 'y' attributes.
+    2. Cluster nodes using DBSCAN based on Euclidean distance and dist_threshold.
+    3. For each cluster, find the node closest to the geometric centroid.
+    4. Create a new graph with these representative nodes.
+    5. Add edges between representative nodes if their original clusters were connected in G.
+    6. Calculate the angle (in degrees) for each edge in the simplified graph.
 
-    Parameters:
-        mask (np.ndarray): A 2D binary array where nonzero (usually 1)
-                           values indicate the object/shape.
+    Args:
+        G: The input NetworkX graph. Nodes are expected to have 'x' and 'y'
+           attributes representing their coordinates.
+        dist_threshold: The maximum distance between nodes for them to be
+                        considered part of the same cluster (epsilon for DBSCAN).
 
     Returns:
-        list[tuple[int, int]]: A list of unique (row, col) tuples for the
-                               identified extreme points. Returns an empty list
-                               if no '1's are found. The order is not guaranteed.
+        A new NetworkX graph containing the simplified representation.
+        Nodes in the new graph will have 'x', 'y', and 'original_nodes' attributes.
+        Edges will have an 'angle' attribute. Returns an empty graph if no
+        nodes with coordinates are found.
     """
-    # Find coordinates (row, col) of all pixels marked as 1
-    coords = np.argwhere(mask == 1)
+    # --- 1. Extract Node Positions ---
+    nodes_with_coords = []
+    node_coords = {}
+    node_list = list(G.nodes(data=True)) # Get nodes with data
 
-    if coords.size == 0:
-        # If there are no '1' pixels, return an empty list
-        return []
+    for node, data in node_list:
+        # Check if 'x' and 'y' attributes exist and are numeric
+        x = data.get('x')
+        y = data.get('y')
+        if x is not None and y is not None and isinstance(x, (int, float)) and isinstance(y, (int, float)):
+            nodes_with_coords.append(node)
+            node_coords[node] = (x, y)
+        # else:
+        #     print(f"Warning: Node {node} skipped due to missing/invalid coordinates.") # Optional warning
 
-    # Determine the overall min/max row and column indices containing '1's
-    min_row, min_col = coords.min(axis=0)
-    max_row, max_col = coords.max(axis=0)
+    if not nodes_with_coords:
+        print("Warning: No nodes with valid 'x' and 'y' coordinates found.")
+        return nx.Graph() # Return empty graph if no valid nodes
 
-    # Use a set to store the resulting points, ensuring uniqueness
-    extreme_points = set()
+    # Create a mapping from index in coords_array back to node ID
+    index_to_node = {i: node for i, node in enumerate(nodes_with_coords)}
+    coords_array = np.array([node_coords[node] for node in nodes_with_coords])
 
-    # --- 1. Process Topmost Row ---
-    top_row_coords = coords[coords[:, 0] == min_row]
-    if top_row_coords.size > 0:
-        extreme_points.add(tuple(top_row_coords[top_row_coords[:, 1].argmin()])) # Leftmost
-        extreme_points.add(tuple(top_row_coords[top_row_coords[:, 1].argmax()])) # Rightmost
+    # --- 2. Cluster Nodes using DBSCAN ---
+    # min_samples=1 ensures that every point is assigned to a cluster (or noise -1)
+    db = DBSCAN(eps=dist_threshold, min_samples=1).fit(coords_array)
+    labels = db.labels_ # Cluster labels for each point
 
-    # --- 2. Process Bottommost Row ---
-    bottom_row_coords = coords[coords[:, 0] == max_row]
-    if bottom_row_coords.size > 0:
-        extreme_points.add(tuple(bottom_row_coords[bottom_row_coords[:, 1].argmin()])) # Leftmost
-        extreme_points.add(tuple(bottom_row_coords[bottom_row_coords[:, 1].argmax()])) # Rightmost
+    # Group nodes by cluster label
+    clusters = {}
+    for i, label in enumerate(labels):
+        node = index_to_node[i]
+        if label not in clusters:
+            clusters[label] = []
+        clusters[label].append(node)
 
-    # --- 3. Process Leftmost Column ---
-    left_col_coords = coords[coords[:, 1] == min_col]
-    if left_col_coords.size > 0:
-        extreme_points.add(tuple(left_col_coords[left_col_coords[:, 0].argmin()])) # Topmost
-        extreme_points.add(tuple(left_col_coords[left_col_coords[:, 0].argmax()])) # Bottommost
+    # --- 3. Find Central Node per Cluster ---
+    representative_nodes = {} # Map cluster label to representative node ID
+    original_to_representative = {} # Map original node ID to its representative
+    simplified_G = nx.Graph()
 
-    # --- 4. Process Rightmost Column ---
-    right_col_coords = coords[coords[:, 1] == max_col]
-    if right_col_coords.size > 0:
-        extreme_points.add(tuple(right_col_coords[right_col_coords[:, 0].argmin()])) # Topmost
-        extreme_points.add(tuple(right_col_coords[right_col_coords[:, 0].argmax()])) # Bottommost
+    for label, cluster_nodes in clusters.items():
+        if label == -1: # Handle noise points (each becomes its own representative)
+            for node in cluster_nodes:
+                representative_node_id = f"repr_{node}" # Create a unique ID
+                representative_nodes[node] = representative_node_id # Use original node as 'cluster label' key
+                original_to_representative[node] = representative_node_id
+                # Add node to simplified graph with original coords and original node list
+                simplified_G.add_node(
+                    representative_node_id,
+                    x=node_coords[node][0],
+                    y=node_coords[node][1],
+                    original_nodes=[node] # List containing only itself
+                )
+        else: # Handle actual clusters
+            if not cluster_nodes:
+                continue
 
-    # Convert the set of unique tuples back to a list
-    return list(extreme_points)
+            cluster_coords = np.array([node_coords[node] for node in cluster_nodes])
+            # Calculate geometric centroid
+            centroid = np.mean(cluster_coords, axis=0)
 
-# --- Example Usage with your specific mask ---
-mask_example_2 = np.array([
-    [0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0],  # Row 0 -> min_row. Left=4, Right=9
-    [0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0],
-    [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
-    [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0],  # Col 4 -> min_col. Top=0, Bottom=8
-    [0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0],  # Col 9 -> max_col. Top=0, Bottom=0
-    [1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0]   # Row 10 -> max_row. Left=0, Right=6. Col 0 -> min_col. Top=10, Bottom=10
-])                                      # Col 6 -> max_col (NO, max_col is 9). Col 6: Top=2, Bot=10
+            # Find the node closest to the centroid
+            min_dist = float('inf')
+            central_node = cluster_nodes[0] # Default to first node
+            for node in cluster_nodes:
+                dist = euclidean(node_coords[node], centroid)
+                if dist < min_dist:
+                    min_dist = dist
+                    central_node = node
 
-# Calculation Trace:
-# min_row=0, max_row=10, min_col=0, max_col=9
-# Top Row (0): Left=(0,4), Right=(0,9) -> {(0,4), (0,9)}
-# Bottom Row (10): Left=(10,0), Right=(10,6) -> {(0,4), (0,9), (10,0), (10,6)}
-# Left Col (0): Top=(10,0), Bottom=(10,0) -> {(0,4), (0,9), (10,0), (10,6)} (no change)
-# Right Col (9): Top=(0,9), Bottom=(0,9) -> {(0,4), (0,9), (10,0), (10,6)} (no change)
+            # Use the central node as the representative for this cluster
+            representative_node_id = f"repr_{central_node}" # Use central node's ID in the new name
+            representative_nodes[label] = representative_node_id
+            for node in cluster_nodes:
+                original_to_representative[node] = representative_node_id
 
-extreme_pixels = get_extreme_points_hv(mask_example_2)
-print(f"Calculated: {sorted(extreme_pixels)}") # Sorting for consistent comparison
-print(f"Expected:   {sorted([(10, 0), (10, 6), (0, 9), (0, 4)])}")
+            # Add representative node to the simplified graph
+            simplified_G.add_node(
+                representative_node_id,
+                x=node_coords[central_node][0],
+                y=node_coords[central_node][1],
+                original_nodes=list(cluster_nodes) # Store all original nodes
+            )
 
-# Output should match:
-# Calculated: [(0, 4), (0, 9), (10, 0), (10, 6)]
-# Expected:   [(0, 4), (0, 9), (10, 0), (10, 6)]
+    # --- 4. Add Edges based on Original Connectivity ---
+    added_edges = set() # Keep track of added edges to avoid duplicates
 
-# --- Test previous example too ---
-mask_example_1 = np.array([
-    [0, 0, 0, 0, 1, 1, 0], # row 0. min_r=0. L=4, R=5
-    [0, 0, 0, 1, 0, 0, 0], # col 0. min_c=0. T=5, B=6
-    [0, 0, 0, 0, 1, 0, 0],
-    [0, 0, 0, 1, 0, 0, 0],
-    [0, 1, 1, 0, 1, 0, 0],
-    [1, 0, 0, 0, 0, 1, 0], # col 5. max_c=5. T=0, B=6
-    [1, 0, 0, 0, 0, 1, 0]  # row 6. max_r=6. L=0, R=5
-])
-# min_r=0, max_r=6, min_c=0, max_c=5
-# Top R(0): L=(0,4), R=(0,5) -> {(0,4), (0,5)}
-# Bot R(6): L=(6,0), R=(6,5) -> {(0,4), (0,5), (6,0), (6,5)}
-# Left C(0): T=(5,0), B=(6,0) -> {(0,4), (0,5), (6,0), (6,5), (5,0)}
-# Right C(5): T=(0,5), B=(6,5) -> {(0,4), (0,5), (6,0), (6,5), (5,0)}
+    for u_orig, v_orig in G.edges():
+        # Find representatives for the original edge's nodes
+        u_repr = original_to_representative.get(u_orig)
+        v_repr = original_to_representative.get(v_orig)
 
-extreme_pixels_1 = get_extreme_points_hv(mask_example_1)
-print(f"\nExample 1 Calculated: {sorted(extreme_pixels_1)}")
-# Expected: [(0, 4), (0, 5), (5, 0), (6, 0), (6, 5)]
+        # Check if both nodes have representatives and they are different
+        if u_repr is not None and v_repr is not None and u_repr != v_repr:
+            # Ensure edge order doesn't matter for the check
+            edge_tuple = tuple(sorted((u_repr, v_repr)))
+
+            if edge_tuple not in added_edges:
+                # Get coordinates of representative nodes
+                coords_u = (simplified_G.nodes[u_repr]['x'], simplified_G.nodes[u_repr]['y'])
+                coords_v = (simplified_G.nodes[v_repr]['x'], simplified_G.nodes[v_repr]['y'])
+
+                # Calculate angle
+                delta_x = coords_v[0] - coords_u[0]
+                delta_y = coords_v[1] - coords_u[1]
+                angle = math.degrees(math.atan2(delta_y, delta_x))
+
+                # Add edge with angle attribute
+                simplified_G.add_edge(u_repr, v_repr, angle=angle)
+                added_edges.add(edge_tuple) # Mark edge as added
+
+    return simplified_G
+
+# --- Example Usage ---
+if __name__ == '__main__':
+    # Create a sample graph
+    G_orig = nx.Graph()
+    # Cluster 1
+    G_orig.add_node(1, x=1.0, y=1.0)
+    G_orig.add_node(2, x=1.1, y=1.2)
+    G_orig.add_node(3, x=0.9, y=0.8)
+    # Cluster 2
+    G_orig.add_node(4, x=5.0, y=5.0)
+    G_orig.add_node(5, x=5.1, y=4.9)
+    # Outlier
+    G_orig.add_node(6, x=10.0, y=10.0)
+    # Node without coords
+    G_orig.add_node(7)
+    # Node with partial coords
+    G_orig.add_node(8, x=15.0)
+
+
+    # Add edges
+    G_orig.add_edge(1, 2) # Within cluster 1
+    G_orig.add_edge(1, 3) # Within cluster 1
+    G_orig.add_edge(4, 5) # Within cluster 2
+    G_orig.add_edge(2, 4) # Between cluster 1 and 2
+    G_orig.add_edge(3, 5) # Between cluster 1 and 2
+    G_orig.add_edge(5, 6) # Between cluster 2 and outlier
+    G_orig.add_edge(1, 7) # Edge involving node without coords (will be ignored in simplification)
+    G_orig.add_edge(6, 8) # Edge involving node with partial coords (will be ignored)
+
+
+    print(f"Original Graph:")
+    print(f"Nodes: {G_orig.nodes(data=True)}")
+    print(f"Edges: {G_orig.edges()}")
+    print("-" * 20)
+
+    # Simplify the graph
+    simplified_graph = simplify_intersections_fast_2(G_orig, dist_threshold=0.5)
+
+    print(f"Simplified Graph:")
+    print(f"Nodes: {simplified_graph.nodes(data=True)}")
+    print(f"Edges: {simplified_graph.edges(data=True)}") # Print edges with angle data
+
+    # --- Verification ---
+    # Expected representative nodes (approximate, depends on exact centroid/closest logic):
+    # Cluster 1 (nodes 1, 2, 3) -> centroid near (1.0, 1.0), node 1 is likely closest. Repr: repr_1
+    # Cluster 2 (nodes 4, 5) -> centroid near (5.05, 4.95), node 5 is likely closest. Repr: repr_5
+    # Outlier (node 6) -> treated as its own cluster. Repr: repr_6
+    # Nodes 7, 8 ignored.
+
+    # Expected edges in simplified graph:
+    # repr_1 <-> repr_5 (because 2-4 and 3-5 existed)
+    # repr_5 <-> repr_6 (because 5-6 existed)
+
+    # Check number of nodes
+    expected_nodes = 3 # repr_1, repr_5, repr_6
+    print(f"\nExpected simplified nodes: {expected_nodes}, Found: {simplified_graph.number_of_nodes()}")
+    assert simplified_graph.number_of_nodes() == expected_nodes
+
+    # Check number of edges
+    expected_edges = 2 # (repr_1, repr_5), (repr_5, repr_6)
+    print(f"Expected simplified edges: {expected_edges}, Found: {simplified_graph.number_of_edges()}")
+    assert simplified_graph.number_of_edges() == expected_edges
+
+    # Check specific edges and angles (angles depend on chosen representatives)
+    if simplified_graph.has_edge('repr_1', 'repr_5'):
+        print("Edge (repr_1, repr_5) exists.")
+        print(f"  Angle: {simplified_graph.edges['repr_1', 'repr_5']['angle']:.2f} degrees")
+    if simplified_graph.has_edge('repr_5', 'repr_6'):
+        print("Edge (repr_5, repr_6) exists.")
+        print(f"  Angle: {simplified_graph.edges['repr_5', 'repr_6']['angle']:.2f} degrees")

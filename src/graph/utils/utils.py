@@ -177,7 +177,9 @@ def binary_mask_to_graph_indexed(mask, connectivity=4):
 
     # Step 3: define neighbors
     if connectivity == 4:
-        offsets = [(0, 1), (1, 0)]
+        # offsets = [(0, 1), (1, 0)]
+        offsets = [(1, 1), (1, -1)]
+        
     else:
         offsets = [(0, 1), (1, 0), (1, 1), (1, -1)]
 
@@ -189,15 +191,7 @@ def binary_mask_to_graph_indexed(mask, connectivity=4):
             if 0 <= ny < h and 0 <= nx_ < w and mask[ny, nx_]:
                 src_idx = coord_to_index[(y, x)]
                 dst_idx = coord_to_index[neighbor]
-                # Get positions
-                # pos_u = np.array((x, y))
-                # pos_v = np.array((nx_, ny))
 
-                # # Compute angle
-                # vec = pos_v - pos_u
-                # angle_rad = np.arctan2(vec[1], vec[0])
-                # angle_deg = np.degrees(angle_rad)
-                
                 G.add_edge(src_idx, dst_idx)
 
     return G
@@ -247,6 +241,126 @@ def draw_nx_graph(graph, img_size=(621, 1104)):
     plt.axis('equal')
     plt.show()
     
+import networkx as nx
+import numpy as np
+import math
+from scipy.spatial import KDTree
+
+class UnionFind:
+    def __init__(self, elements):
+        # Each element starts as its own parent.
+        self.parent = {x: x for x in elements}
+
+    def find(self, x):
+        # Path-compression
+        if self.parent[x] != x:
+            self.parent[x] = self.find(self.parent[x])
+        return self.parent[x]
+
+    def union(self, x, y):
+        # Find roots
+        root_x = self.find(x)
+        root_y = self.find(y)
+        # Merge the sets if different
+        if root_x != root_y:
+            self.parent[root_y] = root_x
+
+def simplify_intersections_fast_2(G: nx.Graph, dist_threshold=1.0) -> nx.DiGraph:
+    """
+    Downsamples the graph by clustering nodes that are close together.
+    
+    Steps:
+      1. Cluster nodes that are within dist_threshold using a KDTree and union-find.
+      2. For each cluster, compute the centroid and select the node nearest to the centroid as the representative.
+      3. Reconstruct a new graph with the representatives as nodes.
+      4. For each pair of representatives that are within dist_threshold, add an edge with the angle in degrees.
+    """
+    # --- 1. Extract node positions ---
+    nodes = list(G.nodes())
+    # positions = {}
+    # for node in nodes:
+    #     pos = G.nodes[node].get('pos')
+    #     if pos is None:
+    #         raise ValueError(f"Node {node} missing 'pos' attribute")
+    #     positions[node] = pos
+    pos_array = np.array([G.nodes[node].get('pos') for node in nodes])
+    
+    # --- 2. Cluster nodes using KDTree and Union-Find ---
+    tree = KDTree(pos_array)
+    # uf = UnionFind(nodes)
+    
+    # For each node, query all neighbors within the dist_threshold (including itself)
+    clusters = []
+    visited = set()
+    for i, node in enumerate(nodes):
+        if node in visited:
+            continue
+        cluster = tree.query_ball_point(pos_array[i],r=dist_threshold)
+        clusters.append(sorted(cluster))
+        for j in cluster:
+            visited.add(j)
+    # Build clusters as a mapping: {cluster_root: [list of nodes]}
+    # clusters = {}
+    # for node in nodes:
+    #     root = uf.find(node)
+    #     clusters.setdefault(root, []).append(node)
+    
+    # --- 3. Select representative for each cluster ---
+    # For each cluster, we compute the centroid (mean of positions)
+    # and then choose the node that is closest to that centroid.
+    cluster_rep = {}  # Mapping from cluster id (root) to chosen node id
+    for cluster in clusters:
+        coords = pos_array[cluster]
+        centroid = np.mean(coords, axis=0)
+        # Find node closest to centroid
+        best_node = cluster[0]
+        best_dist = np.linalg.norm(np.array(pos_array[best_node]) - centroid)
+        for n in cluster:
+            d = np.linalg.norm(np.array(pos_array[n]) - centroid)
+            if d < best_dist:
+                best_dist = d
+                best_node = n
+        cluster_rep[best_node] = tuple(pos_array[best_node])
+    
+    # Map each original node to its representative (if needed later)
+    # node_to_rep = {node: cluster_rep[uf.find(node)] for node in nodes}
+    
+    # --- 4. Build the simplified graph ---
+    simplified_G = nx.DiGraph()
+    
+    # Add each representative (unique) as a node in the new graph.
+    # rep_nodes = set(sorted(list(cluster_rep.keys())))
+    # rep_poss = set(sorted(list(cluster_rep.keys())))
+    for rep in cluster_rep.items():
+        simplified_G.add_node(rep[0], pos=rep[1])
+    
+    # Now reconnect representative nodes by adding edges if they are within the given distance.
+    # First, build a KDTree on representative positions.
+    rep_nodes_list = list(cluster_rep.keys())
+    rep_positions = np.asarray(list(cluster_rep.values()))
+    rep_tree = KDTree(rep_positions)
+    
+    # For each representative, find others within the threshold
+    # and add an edge with an angle attribute.
+    construction_dist_threshold = dist_threshold*2
+    for i, rep in enumerate(rep_nodes_list):
+        pos_i = rep_positions[i]
+        indices = rep_tree.query_ball_point(pos_i, construction_dist_threshold)
+        for j in indices:
+            # Avoid self-loops and duplicate edges (only add if j > i)
+            if j <= i:
+                continue
+            # add edge for each direction
+            rep_j = rep_nodes_list[j]
+            pos_j = rep_positions[j]
+            # Calculate angle in degrees
+            dx = pos_j[0] - pos_i[0]
+            dy = pos_j[1] - pos_i[1]
+            angle = math.degrees(math.atan2(dy, dx))
+            simplified_G.add_edge(rep, rep_j, angle_deg=angle)
+            other_way_angle = math.degrees(math.atan2(-dy,-dx))
+            simplified_G.add_edge(rep_j, rep, angle_deg=other_way_angle)
+    return simplified_G
 
 import numpy as np
 import networkx as nx
@@ -259,13 +373,7 @@ def get_angle_rad(pos_from:tuple[int,int],pos_to:tuple[int,int])-> float:
     return np.arctan2(abs(dy), abs(dx))
 
 
-def simplify_intersections_fast_2(G: nx.Graph, dist_threshold=1.0):
-    
-    
 
-    
-    simplified_G = None
-    return simplified_G
 def simplify_intersections_fast(G: nx.Graph, threshold=1.0):
     # Extract node indices and their positions
     node_indices = np.array(G.nodes())
@@ -374,12 +482,6 @@ import networkx as nx
 def angle_diff(a1, a2):
     """Returns smallest absolute angle difference in radians."""
     return abs(a2 - a1 )
-    # """Returns the directed angle difference in radians in the range [0, 2pi).
-    
-    # Here, if a2 equals a1 then the result is 0. 
-    # A positive result means a counter-clockwise turn from a1 to a2.
-    # """
-    # return (a2 - a1) % (2 * np.pi)
 
 def find_smoothest_path(G, start_node, goal_node):
     # pos = nx.get_node_attributes(G, 'pos')
@@ -420,19 +522,28 @@ def find_smoothest_path(G, start_node, goal_node):
 # find the smothest path between length n from a node 
 def find_smoothest_path_length(G, start_node, length, goal_node, last_path=None):
     # pos = nx.get_node_attributes(G, 'pos')
-    edge_angles = nx.get_edge_attributes(G, 'angle_rad')
+    edge_angles = nx.get_edge_attributes(G, 'angle_deg')
 
     # Each state is (cost, current_node, incoming_angle, path)
     heap = [(0, start_node, None, [start_node])]
     visited = dict()
-
+    candidate_paths = []  # To store candidate paths as tuples (cost, path)
     while heap:
         cost, current, in_angle, path = heapq.heappop(heap)
 
+        # Check if the current path qualifies as a candidate.
+        is_candidate = False
+        if goal_node is not None:
+            if current == goal_node:
+                is_candidate = True
+        
+        if len(path) == length:
+            is_candidate = True
 
-        # Check goal
-        if len(path) == length or (current == goal_node and goal_node is not None):
-            return path
+        if is_candidate:
+            candidate_paths.append((cost, path))
+            # Do not expand this path further.
+            continue
 
         state_key = (current, in_angle if in_angle is not None else None)
         if state_key in visited and visited[state_key] <= cost:
@@ -447,8 +558,9 @@ def find_smoothest_path_length(G, start_node, length, goal_node, last_path=None)
             if last_path is not None:
                 if neighbor in last_path:
                     continue
+
             # Edge can be (current, neighbor) or (neighbor, current)
-            edge = (current, neighbor) if (current, neighbor) in edge_angles else (neighbor, current)
+            edge = (current, neighbor)
             out_angle = edge_angles[edge]
 
             if in_angle is None:
@@ -462,15 +574,20 @@ def find_smoothest_path_length(G, start_node, length, goal_node, last_path=None)
             if candidate_path == last_path:
                 continue
             heapq.heappush(heap, (total_cost, neighbor, out_angle,candidate_path ))
-
+        # After exploring all possibilities, choose the candidate with the smallest cost.
+    if candidate_paths:
+        best_candidate = min(candidate_paths, key=lambda x: x[0])[1]
+        return best_candidate
+    print("No path found in the heap")
     return None  # No path found
 
 # traverse the graph in n size steps
 def find_dlo(G, start_node, goal_node):
     path = []
     traverse = True
-    small_path = find_smoothest_path_length(G, start_node, 5,goal_node)
-    if path is None:
+    branch_length = 10
+    small_path = find_smoothest_path_length(G, start_node, branch_length,goal_node,last_path=path)
+    if small_path is None:
         print("No path found")
         traverse = False
     else:
@@ -478,15 +595,82 @@ def find_dlo(G, start_node, goal_node):
         start_node = small_path[-1]
     while traverse:
         revers_path = small_path[::-1]
-        small_path = find_smoothest_path_length(G, start_node, 5,goal_node,last_path=revers_path)
+        small_path = find_smoothest_path_length(G, start_node, branch_length,goal_node,last_path=path)
         if small_path is None:
             traverse = False
             print("No path found")
         else:
             path.extend(small_path[1:])
             start_node = small_path[-1]
-        if start_node == goal_node:
+        if start_node == goal_node :
             traverse = False
             print("Goal reached")
     
     return path
+
+import networkx as nx
+import math
+
+def angle_diff(a: float, b: float) -> float:
+    """
+    Compute the minimum absolute difference between two angles (in degrees).
+    This value is always between 0 and 180.
+    """
+    diff = abs(a - b) % 360
+    return diff if diff <= 180 else 360 - diff
+
+def find_longest_path(G: nx.DiGraph, start: int, max_angle: float) -> list[int]:
+    """
+    Finds the longest simple path in a directed graph G starting from the 
+    specified node, under the constraint that the difference between the angles of 
+    consecutive edges does not exceed max_angle.
+    
+    The graph is assumed to have an edge attribute 'angle_deg' giving the direction
+    of the edge in degrees. For the first step (from the start node), no angle
+    constraint is applied.
+    
+    Args:
+        G (nx.DiGraph): A directed graph with edges that have an 'angle_deg' attribute.
+        start (int): The starting node.
+        max_angle (float): Maximum allowed difference (in degrees) between consecutive edges.
+    
+    Returns:
+        list[int]: A list of nodes representing the longest valid path found. If no 
+                   extension is possible, returns the trivial path [start].
+    """
+    best_path = [start]  # Global variable to store the longest valid path found
+    
+    def dfs(current: int, current_path: list[int], prev_angle: float | None):
+        nonlocal best_path
+        
+        # Update best_path if the current path is longer than the previously found path.
+        if len(current_path) > len(best_path):
+            best_path = current_path.copy()
+        
+        # Iterate over outgoing neighbors of the current node.
+        for neighbor in G.successors(current):
+            # Avoid cycles by not revisiting nodes already in the current path.
+            if neighbor in current_path:
+                continue
+            
+            # Retrieve the angle of the edge (current, neighbor); skip the edge if not found.
+            if 'angle_deg' in G[current][neighbor]:
+                edge_angle = G[current][neighbor]['angle_deg']
+            else:
+                continue  # or assign a default value
+            
+            # For the first edge there's no previous angle
+            if prev_angle is not None:
+                # Check if the turning angle is within the allowed maximum.
+                if angle_diff(prev_angle, edge_angle) > max_angle:
+                    continue  # Skip this edge as it violates the angle constraint
+            
+            # Recursively extend the current path.
+            current_path.append(neighbor)
+            dfs(neighbor, current_path, edge_angle)
+            current_path.pop()
+
+    dfs(start, [start], None)
+    return best_path
+
+
