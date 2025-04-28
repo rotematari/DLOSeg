@@ -59,53 +59,27 @@ if __name__ == '__main__':
     nx.draw(G, pos=pos, node_size=5, edge_color='red', with_labels=True)
     plt.pause(0.01)
     G = connect_nodes_by_bending_energy(G,10)
+    
+    G = prune_graph(G,3)
     plt.figure()
     pos = nx.get_node_attributes(G, 'pos')
     nx.draw(G, pos=pos, node_size=5, edge_color='red', with_labels=True)
     plt.gca().invert_yaxis()
-    # TODO : prone nodes with high turning angles
-    # Find leaf nodes (nodes with only one neighbor)
-    leaf_nodes = [n for n in G.nodes if G.degree[n] == 1]
-    # print("Leaf nodes:", leaf_nodes)
-    paths = []
-    list_of_paths = []
-    if len(leaf_nodes) > 0:
-        for node in leaf_nodes:
-            # print("Node:", node)
-            
-            path   = sparse_greedy_path(G,
-                                        node
-                                        )
-            
-            if node not in paths:
-                list_of_paths.append(path)
-                paths.extend(path)
-            # subG = G.subgraph(path)
-            # pos = nx.get_node_attributes(subG, 'pos')
-            # nx.draw(subG, pos=pos, node_size=5, edge_color='red', with_labels=True)
-    
-    # nx.draw(G, pos=pos, node_size=5, edge_color='red', with_labels=True)
+
     print("Time taken to simplify intersections:", time.time() - start_sif)
-    # paths = extend_paths(   paths = list_of_paths,
-    #                         G_full = G_full,
-    #                         G = G,
-    #                         max_dist = 50.0,
-    #                         max_line_dist = 1.0,
-    #                         line_agreement = 0.950,
-    #                         k_candidates = 10
-    #                         )
-    # plt.figure()
-    # for path in paths:
-        
-    #     subG = G.subgraph(path)
-    #     pos = nx.get_node_attributes(subG, 'pos')
-    #     nx.draw(subG, pos=pos, node_size=5, edge_color='red', with_labels=False)
+
     
     plt.pause(0.01)
     # plt.gca().invert_yaxis()
     # plt.show()
     start_smooth = time.time()
-
+    # path = traverse_graph_by_smallest_bending_energy(G)
+    # subG = G.subgraph(path)
+    # pos = nx.get_node_attributes(subG, 'pos')
+    # plt.figure(figsize=(10, 10))
+    # nx.draw(subG, pos=pos, node_size=5, edge_color='red', with_labels=False)
+    # plt.gca().invert_yaxis()
+    # plt.show()
     print("Time taken to smooth path:", time.time() - start_smooth)
     print("Total time taken:", time.time() - start_total)
     # subG = G.subgraph(path)

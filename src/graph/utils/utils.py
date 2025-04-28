@@ -386,12 +386,13 @@ def add_bending_energy_to_node_and_prune(G:nx.Graph, alpha:float = 1.0) -> nx.Gr
         # frome the node to the next node
         edge_from_node = np.array(node_dict[neighbors[1]]) - np.array(node_dict[node[0]])
 
-        be = float(bending_energy(edge_to_node, edge_from_node, alpha=alpha))
-        if be > 10:
+        be_value = float(bending_energy(edge_to_node, edge_from_node, alpha=alpha))
+        if be_value > 2:
             # drop the node and the edges
             G.remove_node(node[0])
             continue
-        G.nodes[node[0]]['bending_energy'] = be
+        # G.nodes[node[0]]['bending_energy'] = (neighbors[0],neighbors[1]),be
+        G.nodes[node[0]].setdefault('bending_energy', []).append(((neighbors[0],neighbors[1]),be_value))
     
     # prune the graph
     # get all one degree nodes
@@ -454,26 +455,25 @@ def connect_nodes_by_bending_energy(G: nx.Graph, number_of_nb=10) -> nx.Graph:
     for node in one_degree_nodes:
         print("\n-------------------------------------------------")
         print("Working on Node {}".format(node))
+        if G.degree[node] > 1:
+            continue
         node_pos = G.nodes[node]["pos"]
         # get n closest nodes
         _, idxs = tree.query(G.nodes[node]["pos"],
                             k=number_of_nb,
                             )
         bending_energys = {}
+        print("Closest nodes to {}: {}".format(node, nodes[idxs]))
         for idx in idxs:
             # get the node
             candidate_node = nodes[idx]
             
             # Skip self or already connected nodes
             if candidate_node == node or G.has_edge(node, candidate_node):
-                print("Node {} is already connected to {}".format(node, candidate_node))
+                # print("Node {} is already connected to {}".format(node, candidate_node))
                 continue
                 
-            # # Skip nodes with too many connections already
-            # if G.degree[candidate_node] >= 2:
-            #     print("Node {} has too many connections".format(candidate_node))
-            #     continue
-                
+
             candidate_pos = G.nodes[candidate_node]["pos"]
             # get first node neighbor
             first_node_nb = list(G.neighbors(node))[0]
@@ -484,17 +484,17 @@ def connect_nodes_by_bending_energy(G: nx.Graph, number_of_nb=10) -> nx.Graph:
             # frome the node to the next node
             edge_from_node = np.array(node_pos) - np.array(candidate_pos)
             if same_line_same_direction(edge_to_node, edge_from_node):
-                print("Node {} and {} are on the same line".format(node, candidate_node))
+                # print("Node {} and {} are on the same line".format(node, candidate_node))
                 continue
             be = float(bending_energy(edge_to_node, edge_from_node, alpha=1.0))
-            bending_energys[candidate_node] = be
+            bending_energys[candidate_node] = (first_node_nb,candidate_node),be
         
         # Find the neighbor node with the lowest bending energy and add edge
         if bending_energys:
-            print("Bending energys: {}".format(bending_energys))
-            best_candidate = min(bending_energys.items(), key=lambda x: x[1])[0]
+            # print("Bending energys: {}".format(bending_energys))
+            best_candidate = min(bending_energys, key=lambda x: bending_energys[x][1])
             best_energy = bending_energys[best_candidate]
-            if best_energy > 10:
+            if best_energy[1] > 10:
                 continue
             
             # Add edge with appropriate attributes
@@ -503,10 +503,17 @@ def connect_nodes_by_bending_energy(G: nx.Graph, number_of_nb=10) -> nx.Graph:
             )
             edge_vector = np.array(G.nodes[best_candidate]["pos"]) - np.array(G.nodes[node]["pos"])
             
-            G.nodes[node]['bending_energy'] = best_energy
+            # if G.nodes[node]['bending_energy']:
+            #     if G.nodes[node]['bending_energy'][1] > best_energy:
+            #         # incoming node 
+            #         G
+            #         G.nodes[node]['bending_energy'] = best_candidate, best_energy
+            # incoming node 
+
             if G.has_edge(node, best_candidate):
                 print("Node {} and {} are already connected".format(node, best_candidate))
                 continue
+
             G.add_edge(
                 node, 
                 best_candidate, 
@@ -514,7 +521,25 @@ def connect_nodes_by_bending_energy(G: nx.Graph, number_of_nb=10) -> nx.Graph:
                 vector=edge_vector,
             )
             print("Added edge between {} and {} with weight {}".format(node, best_candidate, edge_weight))
-    
+            # add bending_energy to the node
+            G.nodes[node].setdefault('bending_energy', []).append(best_energy)
+            
+            # add bending_energy to the best candidate node
+            # from node to best candidate
+            to_best_candidate = np.array(G.nodes[best_candidate]['pos']) - np.array(G.nodes[node]['pos'])
+            
+            best_candidate_nbrs = list(G.neighbors(best_candidate))
+            if len(best_candidate_nbrs) > 0:
+                for best_candidate_nbr in best_candidate_nbrs:
+                    # from best candidate to the neighbor
+                    from_best_candidate = np.array(G.nodes[best_candidate_nbr]['pos']) - np.array(G.nodes[best_candidate]['pos'])
+                    be = float(bending_energy(from_best_candidate, to_best_candidate, alpha=1.0))
+                    if be > 10:
+                        continue
+                    if best_candidate_nbr == node:
+                        continue
+                    G.nodes[best_candidate].setdefault('bending_energy', []).append(((node,best_candidate_nbr),be))
+
     return G
             
             
@@ -554,205 +579,300 @@ def bending_energy(prev_edges,next_edges, alpha=1.0):
 
     kappa2  = (kappa_b**2).sum(dim=1)                # (1,)
     l_i     = 0.5 * (L_prev + L_next)                # (1,)
-    E_i     = kappa2 * l_i                           # (1,)                     
+    # E_i     = kappa2 * l_i                           # (1,) 
+    E_i =  kappa2                   
     return E_i
 
-def get_angle_rad(pos_from:tuple[int,int],pos_to:tuple[int,int])-> float:
-    dx = pos_from[0] - pos_to[0]
-    dy = pos_from[1] - pos_to[1]
-    return np.arctan2(abs(dy), abs(dx))
-
-
-def angle_diff(a1, a2):
-    """Returns smallest absolute angle difference in radians."""
-    return abs(a2 - a1 )
-
-def find_smoothest_path(G, start_node, goal_node):
-    # pos = nx.get_node_attributes(G, 'pos')
-    edge_angles = nx.get_edge_attributes(G, 'angle_rad')
-
-    # Each state is (cost, current_node, incoming_angle, path)
-    heap = [(0, start_node, None, [start_node])]
-    visited = dict()
-
-    while heap:
-        cost, current, in_angle, path = heapq.heappop(heap)
-
-        # Check goal
-        if current == goal_node:
-            return path
-
-        state_key = (current, in_angle if in_angle is not None else None)
-        if state_key in visited and visited[state_key] <= cost:
-            continue
-        visited[state_key] = cost
-
-        for neighbor in G.neighbors(current):
-            # Edge can be (current, neighbor) or (neighbor, current)
-            edge = (current, neighbor) if (current, neighbor) in edge_angles else (neighbor, current)
-            out_angle = edge_angles[edge]
-
-            if in_angle is None:
-                angle_cost = 0  # First step, no turning cost
-            else:
-                angle_cost = angle_diff(in_angle, out_angle)
-
-            total_cost = cost + angle_cost
-            heapq.heappush(heap, (total_cost, neighbor, out_angle, path + [neighbor]))
-
-    return None  # No path found
-
-
-# find the smothest path between length n from a node 
-def find_smoothest_path_length(G, start_node, length, goal_node, last_path=None):
-    # pos = nx.get_node_attributes(G, 'pos')
-    edge_angles = nx.get_edge_attributes(G, 'angle_deg')
-
-    # Each state is (cost, current_node, incoming_angle, path)
-    heap = [(0, start_node, None, [start_node])]
-    visited = dict()
-    candidate_paths = []  # To store candidate paths as tuples (cost, path)
-    while heap:
-        cost, current, in_angle, path = heapq.heappop(heap)
-
-        # Check if the current path qualifies as a candidate.
-        is_candidate = False
-        if goal_node is not None:
-            if current == goal_node:
-                is_candidate = True
+def prune_graph(G:nx.Graph, max_degree:int = 3) -> nx.Graph:
+    """
+    Prune the graph by removing nodes with bending energy above a threshold.
+    
+    Parameters:
+    -----------
+    G : nx.Graph
+        Input graph with node attribute 'pos'
+    max_degree : int, default 3
+        Maximum allowed degree for nodes to be retained
         
-        if len(path) == length:
-            is_candidate = True
-
-        if is_candidate:
-            candidate_paths.append((cost, path))
-            # Do not expand this path further.
-            continue
-
-        state_key = (current, in_angle if in_angle is not None else None)
-        if state_key in visited and visited[state_key] <= cost:
-            continue
-        visited[state_key] = cost
-
-        for neighbor in G.neighbors(current):
-            # # Skip if the neighbor is the last node in the path
-            if len(path) > 1:
-                if neighbor in path:
-                    continue
-            if last_path is not None:
-                if neighbor in last_path:
-                    continue
-
-            # Edge can be (current, neighbor) or (neighbor, current)
-            edge = (current, neighbor)
-            out_angle = edge_angles[edge]
-
-            if in_angle is None:
-                angle_cost = 0  # First step, no turning cost
-            else:
-                angle_cost = angle_diff(in_angle, out_angle)
-
-            total_cost = cost + angle_cost
-            candidate_path = path + [neighbor]
-            # Check if the candidate path is valid
-            if candidate_path == last_path:
-                continue
-            heapq.heappush(heap, (total_cost, neighbor, out_angle,candidate_path ))
-        # After exploring all possibilities, choose the candidate with the smallest cost.
-    if candidate_paths:
-        best_candidate = min(candidate_paths, key=lambda x: x[0])[1]
-        return best_candidate
-    print("No path found in the heap")
-    return None  # No path found
-
-# traverse the graph in n size steps
-def find_dlo(G, start_node, goal_node):
-    path = []
-    traverse = True
-    branch_length = 10
-    small_path = find_smoothest_path_length(G, start_node, branch_length,goal_node,last_path=path)
-    if small_path is None:
-        print("No path found")
-        traverse = False
-    else:
-        path.extend(small_path)
-        start_node = small_path[-1]
-    while traverse:
-        revers_path = small_path[::-1]
-        small_path = find_smoothest_path_length(G, start_node, branch_length,goal_node,last_path=path)
-        if small_path is None:
-            traverse = False
-            print("No path found")
-        else:
-            path.extend(small_path[1:])
-            start_node = small_path[-1]
-        if start_node == goal_node :
-            traverse = False
-            print("Goal reached")
-    
-    return path
-
-
-def angle_diff(a: float, b: float) -> float:
-    """
-    Compute the minimum absolute difference between two angles (in degrees).
-    This value is always between 0 and 180.
-    """
-    diff = abs(a - b) % 360
-    return diff if diff <= 180 else 360 - diff
-
-def find_longest_path(G: nx.DiGraph, start: int, max_angle: float) -> list[int]:
-    """
-    Finds the longest simple path in a directed graph G starting from the 
-    specified node, under the constraint that the difference between the angles of 
-    consecutive edges does not exceed max_angle.
-    
-    The graph is assumed to have an edge attribute 'angle_deg' giving the direction
-    of the edge in degrees. For the first step (from the start node), no angle
-    constraint is applied.
-    
-    Args:
-        G (nx.DiGraph): A directed graph with edges that have an 'angle_deg' attribute.
-        start (int): The starting node.
-        max_angle (float): Maximum allowed difference (in degrees) between consecutive edges.
-    
     Returns:
-        list[int]: A list of nodes representing the longest valid path found. If no 
-                   extension is possible, returns the trivial path [start].
+    --------
+    G : nx.Graph
+        Pruned graph
     """
-    best_path = [start]  # Global variable to store the longest valid path found
     
-    def dfs(current: int, current_path: list[int], prev_angle: float | None):
-        nonlocal best_path
-        
-        # Update best_path if the current path is longer than the previously found path.
-        if len(current_path) > len(best_path):
-            best_path = current_path.copy()
-        
-        # Iterate over outgoing neighbors of the current node.
-        for neighbor in G.successors(current):
-            # Avoid cycles by not revisiting nodes already in the current path.
-            if neighbor in current_path:
-                continue
-            
-            # Retrieve the angle of the edge (current, neighbor); skip the edge if not found.
-            if 'angle_deg' in G[current][neighbor]:
-                edge_angle = G[current][neighbor]['angle_deg']
-            else:
-                continue  # or assign a default value
-            
-            # For the first edge there's no previous angle
-            if prev_angle is not None:
-                # Check if the turning angle is within the allowed maximum.
-                if angle_diff(prev_angle, edge_angle) > max_angle:
-                    continue  # Skip this edge as it violates the angle constraint
-            
-            # Recursively extend the current path.
-            current_path.append(neighbor)
-            dfs(neighbor, current_path, edge_angle)
-            current_path.pop()
+    # get all one degree nodes
+    big_degree_nodes = [n for n in G.nodes if G.degree[n] > 2]
+    
+    for node in big_degree_nodes:
 
-    dfs(start, [start], None)
-    return best_path
+        G.remove_node(node)
+
+    return G
+def traverse_graph_by_smallest_bending_energy(G:nx.Graph):
+    
+    """
+    Traverse a graph by always choosing the edge that creates the smallest bending energy.
+    
+    Parameters:
+    -----------
+    G : nx.Graph
+        Input graph with node attribute 'pos'
+        
+    Returns:
+    --------
+    paths : list of lists
+        List of paths (each path is a list of node IDs) found by traversing the graph
+    """
+    
+    # get start and end nodes 
+    # nodes with degree 1
+    leaf_nodes = [n for n in G.nodes if G.degree[n] == 1]
+    start_node = leaf_nodes[0]
+    goal_node = leaf_nodes[-1]
+    # print("Start node: {}, Goal node: {}".format(start_node, goal_node))
+    
+    # get all nodes 
+    nodes_dict = nx.get_node_attributes(G, 'bending_energy')
+    
+    traverse = True
+    visited_nodes = set()
+    path = []
+    
+    # start from the first node
+    visited_nodes.add(start_node)
+    path.append(start_node)
+    first_nbr = list(G.neighbors(start_node))[0]
+    # print("First neighbor: {}".format(first_nbr))
+    visited_nodes.add(first_nbr)
+    path.append(first_nbr)
+    current_node = first_nbr
+    last_node = start_node
+    while traverse:
+        # check if the current node is the goal node
+        if current_node == goal_node:
+            print("Goal node reached: {}".format(current_node))
+            traverse = False
+            break
+        bending_energys = nodes_dict[current_node]
+        print("\n-------------------------------------------------")
+        print("Current node: {}, Last node {} , Bending energys: {}".format(current_node,last_node, bending_energys))
+        # find possible candidates
+        # if the path last->current_node->candidate is in the bending energy list
+        # find all the energies with the last node
+        
+        candidate_list = []
+        for bending_energy in bending_energys:
+            if last_node in bending_energy[0]:
+                # check if the candidate is not already visited
+                # if last_node not in visited_nodes:
+                candidate_list.append(bending_energy)
+        # get min bending energy
+        sorted_candidate_list = sorted(candidate_list, key=lambda x: x[1])
+        print("Sorted candidate list: {}".format(sorted_candidate_list))
+        # min_bending_energy = min(candidate_list, key=lambda x: x[1])
+        # print("With Best {}".format(min_bending_energy))
+        
+        # get the best candidate
+        # best_candidate_tuple = min_bending_energy[0]
+        stop = False
+        for best_candidate_tuple,_ in sorted_candidate_list:
+            for best_candidate in best_candidate_tuple:
+                if best_candidate not in visited_nodes :
+                    # if the 
+                    # add the node to the path
+                    path.append(best_candidate)
+                    visited_nodes.add(best_candidate)
+                    last_node = current_node
+                    current_node = best_candidate
+                    stop = True
+                    break
+                else:
+                    print("Candidate {} already visited".format(best_candidate))
+            if stop:
+                break
+        print("Path: {}".format(path))
+
+    return path
+    
+
+#     edge_angles = nx.get_edge_attributes(G, 'angle_rad')
+
+#     # Each state is (cost, current_node, incoming_angle, path)
+#     heap = [(0, start_node, None, [start_node])]
+#     visited = dict()
+
+#     while heap:
+#         cost, current, in_angle, path = heapq.heappop(heap)
+
+#         # Check goal
+#         if current == goal_node:
+#             return path
+
+#         state_key = (current, in_angle if in_angle is not None else None)
+#         if state_key in visited and visited[state_key] <= cost:
+#             continue
+#         visited[state_key] = cost
+
+#         for neighbor in G.neighbors(current):
+#             # Edge can be (current, neighbor) or (neighbor, current)
+#             edge = (current, neighbor) if (current, neighbor) in edge_angles else (neighbor, current)
+#             out_angle = edge_angles[edge]
+
+#             if in_angle is None:
+#                 angle_cost = 0  # First step, no turning cost
+#             else:
+#                 angle_cost = angle_diff(in_angle, out_angle)
+
+#             total_cost = cost + angle_cost
+#             heapq.heappush(heap, (total_cost, neighbor, out_angle, path + [neighbor]))
+
+#     return None  # No path found
+
+
+# # find the smothest path between length n from a node 
+# def find_smoothest_path_length(G, start_node, length, goal_node, last_path=None):
+#     # pos = nx.get_node_attributes(G, 'pos')
+#     edge_angles = nx.get_edge_attributes(G, 'angle_deg')
+
+#     # Each state is (cost, current_node, incoming_angle, path)
+#     heap = [(0, start_node, None, [start_node])]
+#     visited = dict()
+#     candidate_paths = []  # To store candidate paths as tuples (cost, path)
+#     while heap:
+#         cost, current, in_angle, path = heapq.heappop(heap)
+
+#         # Check if the current path qualifies as a candidate.
+#         is_candidate = False
+#         if goal_node is not None:
+#             if current == goal_node:
+#                 is_candidate = True
+        
+#         if len(path) == length:
+#             is_candidate = True
+
+#         if is_candidate:
+#             candidate_paths.append((cost, path))
+#             # Do not expand this path further.
+#             continue
+
+#         state_key = (current, in_angle if in_angle is not None else None)
+#         if state_key in visited and visited[state_key] <= cost:
+#             continue
+#         visited[state_key] = cost
+
+#         for neighbor in G.neighbors(current):
+#             # # Skip if the neighbor is the last node in the path
+#             if len(path) > 1:
+#                 if neighbor in path:
+#                     continue
+#             if last_path is not None:
+#                 if neighbor in last_path:
+#                     continue
+
+#             # Edge can be (current, neighbor) or (neighbor, current)
+#             edge = (current, neighbor)
+#             out_angle = edge_angles[edge]
+
+#             if in_angle is None:
+#                 angle_cost = 0  # First step, no turning cost
+#             else:
+#                 angle_cost = angle_diff(in_angle, out_angle)
+
+#             total_cost = cost + angle_cost
+#             candidate_path = path + [neighbor]
+#             # Check if the candidate path is valid
+#             if candidate_path == last_path:
+#                 continue
+#             heapq.heappush(heap, (total_cost, neighbor, out_angle,candidate_path ))
+#         # After exploring all possibilities, choose the candidate with the smallest cost.
+#     if candidate_paths:
+#         best_candidate = min(candidate_paths, key=lambda x: x[0])[1]
+#         return best_candidate
+#     print("No path found in the heap")
+#     return None  # No path found
+
+# # traverse the graph in n size steps
+# def find_dlo(G, start_node, goal_node):
+#     path = []
+#     traverse = True
+#     branch_length = 10
+#     small_path = find_smoothest_path_length(G, start_node, branch_length,goal_node,last_path=path)
+#     if small_path is None:
+#         print("No path found")
+#         traverse = False
+#     else:
+#         path.extend(small_path)
+#         start_node = small_path[-1]
+#     while traverse:
+#         revers_path = small_path[::-1]
+#         small_path = find_smoothest_path_length(G, start_node, branch_length,goal_node,last_path=path)
+#         if small_path is None:
+#             traverse = False
+#             print("No path found")
+#         else:
+#             path.extend(small_path[1:])
+#             start_node = small_path[-1]
+#         if start_node == goal_node :
+#             traverse = False
+#             print("Goal reached")
+    
+#     return path
+
+
+
+
+# def find_longest_path(G: nx.DiGraph, start: int, max_angle: float) -> list[int]:
+#     """
+#     Finds the longest simple path in a directed graph G starting from the 
+#     specified node, under the constraint that the difference between the angles of 
+#     consecutive edges does not exceed max_angle.
+    
+#     The graph is assumed to have an edge attribute 'angle_deg' giving the direction
+#     of the edge in degrees. For the first step (from the start node), no angle
+#     constraint is applied.
+    
+#     Args:
+#         G (nx.DiGraph): A directed graph with edges that have an 'angle_deg' attribute.
+#         start (int): The starting node.
+#         max_angle (float): Maximum allowed difference (in degrees) between consecutive edges.
+    
+#     Returns:
+#         list[int]: A list of nodes representing the longest valid path found. If no 
+#                    extension is possible, returns the trivial path [start].
+#     """
+#     best_path = [start]  # Global variable to store the longest valid path found
+    
+#     def dfs(current: int, current_path: list[int], prev_angle: float | None):
+#         nonlocal best_path
+        
+#         # Update best_path if the current path is longer than the previously found path.
+#         if len(current_path) > len(best_path):
+#             best_path = current_path.copy()
+        
+#         # Iterate over outgoing neighbors of the current node.
+#         for neighbor in G.successors(current):
+#             # Avoid cycles by not revisiting nodes already in the current path.
+#             if neighbor in current_path:
+#                 continue
+            
+#             # Retrieve the angle of the edge (current, neighbor); skip the edge if not found.
+#             if 'angle_deg' in G[current][neighbor]:
+#                 edge_angle = G[current][neighbor]['angle_deg']
+#             else:
+#                 continue  # or assign a default value
+            
+#             # For the first edge there's no previous angle
+#             if prev_angle is not None:
+#                 # Check if the turning angle is within the allowed maximum.
+#                 if angle_diff(prev_angle, edge_angle) > max_angle:
+#                     continue  # Skip this edge as it violates the angle constraint
+            
+#             # Recursively extend the current path.
+#             current_path.append(neighbor)
+#             dfs(neighbor, current_path, edge_angle)
+#             current_path.pop()
+
+#     dfs(start, [start], None)
+#     return best_path
 
 
