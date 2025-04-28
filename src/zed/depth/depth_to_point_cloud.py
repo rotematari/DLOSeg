@@ -3,32 +3,39 @@ import matplotlib.pyplot as plt
 from zed.utils.utils import load_yaml  # Assumes load_yaml is defined here
 import open3d as o3d
 from scipy.signal import savgol_filter
-
-def depth_to_point_cloud(depth, fx, fy, cx, cy):
+import cv2
+def depth_to_point_cloud(depth, fx, fy, cx, cy, y_up=False, flatten=True):
     """
-    Convert a depth map to a 3D point cloud.
-    
-    Parameters:
-    - depth: 2D numpy array with depth values.
-    - fx, fy: Focal lengths.
-    - cx, cy: Principal point coordinates.
-    
-    Returns:
-    - points: A (H, W, 3) array containing the 3D coordinates.
+    Convert depth map (metric, camera frame) to 3‑D point cloud.
+    Parameters
+    ----------
+    depth : (H,W) array_like
+        Depth in metres along +Z.
+    fx, fy, cx, cy : float
+        Pinhole intrinsics.
+    y_up : bool, optional
+        Flip Y to point upwards.
+    flatten : bool, optional
+        If True, return (N,3); else (H,W,3).
     """
-    height, width = depth.shape
-    # Create a grid of pixel coordinates (u,v)
-    u = np.tile(np.arange(width), (height, 1))
-    v = np.tile(np.arange(height), (width, 1)).T
+    depth = depth.astype(np.float32)
+    H, W = depth.shape
 
-    # Compute 3D coordinates
+    u, v = np.meshgrid(np.arange(W), np.arange(H))
     X = (u - cx) * depth / fx
     Y = (v - cy) * depth / fy
+    if y_up:
+        Y = -Y
     Z = depth
-    
-    # Stack into an array of 3D points
-    points = np.stack((X, Y, Z), axis=-1)
-    return points
+
+    if flatten:
+        pts = np.column_stack((X.ravel(), Y.ravel(), Z.ravel()))
+        valid = np.isfinite(pts[:, 2]) & (pts[:, 2] > 0)
+        return pts[valid]
+    else:
+        pts = np.stack((X, Y, Z), axis=-1)
+        pts[~np.isfinite(pts[..., 2])] = np.nan
+        return pts
 
 def visualize_point_cloud_plt(points, sample=1):
     """
@@ -69,7 +76,7 @@ def visualize_point_cloud(points, sample=1):
     """
     # Optionally subsample for better visualization performance
     if sample > 1:
-        points = points[::sample, ::sample, :]
+        points = points[::sample, :]
 
     # Flatten the array to (N, 3)
     points = points.reshape(-1, 3)
@@ -102,12 +109,15 @@ if __name__ == "__main__":
     # Load depth map from file
     depth_file = "/home/admina/segmetation/DLOSeg/src/FoundationStereo/output/depth_meter.npy"
     depth = np.load(depth_file)
+    img_path = "/home/admina/segmetation/DLOSeg/outputs/grounded_sam2_local_demo/groundingdino_mask_0.png"
+    # Load mask image
+    # mask = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
     path_1 = np.load("/home/admina/segmetation/DLOSeg/path_img_1.npy")
     mask_new = [(x-1,y-1) for x,y in path_1]
-    img = np.zeros_like(depth)
+    mask = np.zeros_like(depth)
     for x,y in mask_new:
-        img[x,y] = 1
-    depth = depth * img
+        mask[x,y] = 1
+    depth = depth * mask
     
     # depth = sg_filter(depth,mask_new)
     
