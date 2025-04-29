@@ -453,9 +453,10 @@ def connect_nodes_by_bending_energy(G: nx.Graph, number_of_nb=10) -> nx.Graph:
     # ---- 2. Build KD‑tree for O(N log N) neighbour look‑ups ---------------
     
     for node in one_degree_nodes:
-        print("\n-------------------------------------------------")
-        print("Working on Node {}".format(node))
+        # print("\n-------------------------------------------------")
+        # print("Working on Node {}".format(node))
         if G.degree[node] > 1:
+            print("Node {} has degree > 1".format(node))
             continue
         node_pos = G.nodes[node]["pos"]
         # get n closest nodes
@@ -463,7 +464,7 @@ def connect_nodes_by_bending_energy(G: nx.Graph, number_of_nb=10) -> nx.Graph:
                             k=number_of_nb,
                             )
         bending_energys = {}
-        print("Closest nodes to {}: {}".format(node, nodes[idxs]))
+        # print("Closest nodes to {}: {}".format(node, nodes[idxs]))
         for idx in idxs:
             # get the node
             candidate_node = nodes[idx]
@@ -503,15 +504,8 @@ def connect_nodes_by_bending_energy(G: nx.Graph, number_of_nb=10) -> nx.Graph:
             )
             edge_vector = np.array(G.nodes[best_candidate]["pos"]) - np.array(G.nodes[node]["pos"])
             
-            # if G.nodes[node]['bending_energy']:
-            #     if G.nodes[node]['bending_energy'][1] > best_energy:
-            #         # incoming node 
-            #         G
-            #         G.nodes[node]['bending_energy'] = best_candidate, best_energy
-            # incoming node 
-
             if G.has_edge(node, best_candidate):
-                print("Node {} and {} are already connected".format(node, best_candidate))
+                # print("Node {} and {} are already connected".format(node, best_candidate))
                 continue
 
             G.add_edge(
@@ -520,7 +514,7 @@ def connect_nodes_by_bending_energy(G: nx.Graph, number_of_nb=10) -> nx.Graph:
                 weight=float(edge_weight),
                 vector=edge_vector,
             )
-            print("Added edge between {} and {} with weight {}".format(node, best_candidate, edge_weight))
+            # print("Added edge between {} and {} with weight {}".format(node, best_candidate, edge_weight))
             # add bending_energy to the node
             G.nodes[node].setdefault('bending_energy', []).append(best_energy)
             
@@ -529,17 +523,20 @@ def connect_nodes_by_bending_energy(G: nx.Graph, number_of_nb=10) -> nx.Graph:
             to_best_candidate = np.array(G.nodes[best_candidate]['pos']) - np.array(G.nodes[node]['pos'])
             
             best_candidate_nbrs = list(G.neighbors(best_candidate))
+            
             if len(best_candidate_nbrs) > 0:
                 for best_candidate_nbr in best_candidate_nbrs:
                     # from best candidate to the neighbor
                     from_best_candidate = np.array(G.nodes[best_candidate_nbr]['pos']) - np.array(G.nodes[best_candidate]['pos'])
                     be = float(bending_energy(from_best_candidate, to_best_candidate, alpha=1.0))
-                    if be > 10:
+                    if be > 2:
                         continue
                     if best_candidate_nbr == node:
                         continue
                     G.nodes[best_candidate].setdefault('bending_energy', []).append(((node,best_candidate_nbr),be))
+                    
 
+                    
     return G
             
             
@@ -599,14 +596,68 @@ def prune_graph(G:nx.Graph, max_degree:int = 3) -> nx.Graph:
     G : nx.Graph
         Pruned graph
     """
-    
+    print("\n-------------------------------------------------\n")
+    print("Pruning graph with max degree {}".format(max_degree))
     # get all one degree nodes
-    big_degree_nodes = [n for n in G.nodes if G.degree[n] > 2]
+    big_degree_nodes = [n for n in G.nodes if G.degree[n] > max_degree]
+    big_degree_nodes_set = set(big_degree_nodes)
     
     for node in big_degree_nodes:
+        if node in big_degree_nodes_set:
+            print("\n-------------------------------------------------")
+            print("Working on Node {}".format(node))
+            big_degree_nodes_set.remove(node)
+            # prune node if it has more bendig energys than neighbors
+            if 'bending_energy' in G.nodes[node]:
+                bending_energys = G.nodes[node]['bending_energy']
+                if G.degree(node) > len(bending_energys)  :
 
-        G.remove_node(node)
 
+                    # connect the neighbors
+                    neighbors = list(G.neighbors(node))
+                    G.remove_node(node)
+                    print("Removed node {} with too many bending energys".format(node))
+                    for neighbor_1 in neighbors:
+                        for neighbor_2 in neighbors:
+                            if neighbor_1 == neighbor_2:
+                                continue
+                            # check if the neighbor is not already connected
+                            if G.has_edge(neighbor_1, neighbor_2):
+                                print("Node {} and {} are already connected".format(neighbor_1, neighbor_2))
+                                continue
+                            # connect the neighbors
+                            
+                            if G.degree[neighbor_1] == 1 and G.degree[neighbor_2] == 1:
+                                G.add_edge(neighbor_1, neighbor_2)
+                                if neighbor_1 in big_degree_nodes_set:
+                                    big_degree_nodes_set.remove(neighbor_1)
+                                    print("Removed node {} from big degree nodes set".format(neighbor_1))
+                                if neighbor_2 in big_degree_nodes_set:
+                                    big_degree_nodes_set.remove(neighbor_2)
+                                    print("Removed node {} from big degree nodes set".format(neighbor_2))
+                                print("Connected node {} to neighbor {}".format(neighbor_1, neighbor_2))
+                            
+
+                    continue
+        
+        # prune nodes with bad bending energy
+        nodes_to_remove = []
+        for node in list(G.nodes):
+            if 'bending_energy' in G.nodes[node]:
+                # get the bending energy
+                bending_energys = G.nodes[node]['bending_energy']
+                # check if the bending energy is too high
+                for bending_energy in bending_energys:
+                    if bending_energy[1] > 2:
+                        nodes_to_remove.append(node)
+                        print("Marked node {} for removal due to bad bending energy".format(node))
+                        break
+        
+        # Remove nodes after the iteration
+        for node in nodes_to_remove:
+            if node in G.nodes:  # Check if still in graph
+                G.remove_node(node)
+                print("Removed node {} with bad bending energy".format(node))
     return G
 def traverse_graph_by_smallest_bending_energy(G:nx.Graph):
     
@@ -678,6 +729,11 @@ def traverse_graph_by_smallest_bending_energy(G:nx.Graph):
         for best_candidate_tuple,_ in sorted_candidate_list:
             for best_candidate in best_candidate_tuple:
                 if best_candidate not in visited_nodes :
+                    # check if the candidate is in the graph
+                    # if not, continue
+                    if best_candidate not in G.nodes:
+                        print("Candidate {} not in graph".format(best_candidate))
+                        continue
                     # if the 
                     # add the node to the path
                     path.append(best_candidate)

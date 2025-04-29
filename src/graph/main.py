@@ -23,29 +23,27 @@ if __name__ == '__main__':
     mask = cv2.resize(mask, (width, height), interpolation=cv2.INTER_AREA)
     # mask = cv2.resize(mask, (width // down_sample, height // down_sample), interpolation=cv2.INTER_AREA)
     mask = (mask > 0).astype(np.uint8)  # Convert to binary mask
-    plt.imshow(mask, cmap='gray')
+    # SHOW MASK
+    # plt.imshow(mask, cmap='gray')
     height, width = mask.shape
     print("Time taken to resize:", time.time() - start_rs)
-    # mask = cv2.ximgproc.thinning(mask)
+    
     start_m2g = time.time()
     G_full = binary_mask_to_graph_indexed(mask,connectivity=8)
     
-    
     print("Time taken to convert to graph:", time.time() - start_m2g)
-    # Draw with saved node positions
+    
+    # Draw full graph on the mask
     # pos = nx.get_node_attributes(G_full, 'pos')
     # nx.draw(G_full, pos=pos, node_size=1, edge_color='gray')
     # plt.gca().invert_yaxis()
     
-    # draw_nx_graph(G)
     start_sif = time.time()
-
-    # G = simplify_intersections_fast_2(G, dist_threshold=2.0)
     G,dic = simplify_graph_by_grid(G=G_full, 
                             grid_size=5,
                             min_cluster_size=10 ,
                             connect_radius_factor=2.5)
-    
+    # draw simplified graph 
     # pos = nx.get_node_attributes(G, 'pos')
     # nx.draw(G, pos=pos, node_size=5, edge_color='red', with_labels=True)
     G = knn_graph_from_pos(
@@ -55,21 +53,30 @@ if __name__ == '__main__':
     )
     G = add_bending_energy_to_node_and_prune( G, 
                             alpha = 1.0)
-    pos = nx.get_node_attributes(G, 'pos')
-    nx.draw(G, pos=pos, node_size=5, edge_color='red', with_labels=True)
-    plt.pause(0.01)
-    G = connect_nodes_by_bending_energy(G,10)
     
-    G = prune_graph(G,3)
-    plt.figure()
-    pos = nx.get_node_attributes(G, 'pos')
-    nx.draw(G, pos=pos, node_size=5, edge_color='red', with_labels=True)
-    plt.gca().invert_yaxis()
+    # pos = nx.get_node_attributes(G, 'pos')
+    # nx.draw(G, pos=pos, node_size=5, edge_color='red', with_labels=True)
+    # plt.pause(0.01)
+    G = connect_nodes_by_bending_energy(G,10)
+    # plt.figure()
+    # pos = nx.get_node_attributes(G, 'pos')
+    # nx.draw(G, pos=pos, node_size=5, edge_color='red', with_labels=True)
+    # plt.gca().invert_yaxis()
+    # plt.pause(0.01)
+    G = prune_graph(G,2)
+
+    G = connect_nodes_by_bending_energy(G,10)
+    # G = prune_graph(G,3)
+    # G = connect_nodes_by_bending_energy(G,10)
+    # plt.figure()
+    # pos = nx.get_node_attributes(G, 'pos')
+    # nx.draw(G, pos=pos, node_size=5, edge_color='red', with_labels=True)
+    # plt.gca().invert_yaxis()
 
     print("Time taken to simplify intersections:", time.time() - start_sif)
 
     
-    plt.pause(0.01)
+    # plt.pause(0.01)
     # plt.gca().invert_yaxis()
     # plt.show()
     start_smooth = time.time()
