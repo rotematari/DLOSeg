@@ -2,3 +2,6 @@
 	path = src/Grounded_SAM_2
 	url = https://github.com/IDEA-Research/Grounded-SAM-2
 
+[submodule "src/segment-anything-2-real-time"]
+	path = src/segment-anything-2-real-time
+	url = https://github.com/Gy920/segment-anything-2-real-time.git
