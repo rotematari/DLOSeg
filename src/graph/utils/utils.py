@@ -20,6 +20,444 @@ from networkx.algorithms.approximation import traveling_salesman_problem, greedy
 import heapq
 import cv2
 from skimage.draw import line 
+import numpy as np
+import networkx as nx
+from collections import defaultdict
+
+import numpy as np
+import networkx as nx
+import cv2
+from collections import defaultdict
+from typing import Literal
+import numpy as np
+import networkx as nx
+import cv2
+from collections import defaultdict
+from typing import Literal, Tuple, Optional
+from scipy.spatial import cKDTree
+from skimage.draw import line  # fast Bresenham
+
+
+# # ╔═══════════════════════════════════════════════════════════════════════╗
+# # ║  1.  Diameter estimate from binary mask                              ║
+# # ╚═══════════════════════════════════════════════════════════════════════╝
+
+# def dlo_width_from_mask(
+#     poses: np.ndarray,
+#     mask_bin: np.ndarray,
+#     statistic: Literal["median", "mean", "min", "max"] = "median",
+# ) -> float:
+#     """Estimate DLO diameter (px) from mask via distance‑transform."""
+#     if mask_bin.dtype != np.uint8:
+#         mask_bin = (mask_bin > 0).astype(np.uint8)
+
+#     dist = cv2.distanceTransform(mask_bin, cv2.DIST_L2, 5)
+#     ys, xs = poses[:, 0].astype(int), poses[:, 1].astype(int)
+#     inside = (
+#         (ys >= 0) & (ys < mask_bin.shape[0]) &
+#         (xs >= 0) & (xs < mask_bin.shape[1])
+#     )
+#     radii = dist[ys[inside], xs[inside]]
+#     if radii.size == 0:
+#         raise ValueError("No valid points for width estimation.")
+
+#     diam = radii * 2.0
+#     stats = {
+#         "median": np.median,
+#         "mean":   np.mean,
+#         "min":    np.min,
+#         "max":    np.max,
+#     }
+#     try:
+#         return float(stats[statistic](diam))
+#     except KeyError:
+#         raise ValueError("statistic must be one of 'median', 'mean', 'min', 'max'")
+
+# # ╔═══════════════════════════════════════════════════════════════════════╗
+# # ║  2.  Mask  ➜  simplified representative graph                        ║
+# # ╚═══════════════════════════════════════════════════════════════════════╝
+
+# def mask_to_simplified_graph(
+#     mask: np.ndarray,
+#     *,
+#     width_stat: Literal["median", "mean", "min", "max"] = "max",
+#     grid_multiplier: float = 3.0,
+#     connect_radius_factor: float = 1.5,
+# ) -> nx.Graph:
+#     """Vectorised mask → sparsified graph (auto‑scales by DLO diameter)."""
+#     mask_bool = mask.astype(bool)
+#     if not mask_bool.any():
+#         return nx.Graph()
+
+#     fg_yx = np.column_stack(np.nonzero(mask_bool))
+#     width_px = dlo_width_from_mask(fg_yx, mask_bool, width_stat)
+#     grid_size = max(grid_multiplier * width_px, 1.0)
+
+#     H, W = mask.shape
+#     idx = np.flatnonzero(mask_bool.ravel())
+#     xs, ys = idx % W, idx // W
+#     coords = np.column_stack((xs, ys))
+
+#     cells = np.floor(coords / grid_size).astype(int)
+#     # cells = np.floor_divide(coords, grid_size, dtype=int)
+#     buckets: dict[Tuple[int, int], list[int]] = defaultdict(list)
+#     for i, cell in enumerate(map(tuple, cells)):
+#         buckets[cell].append(i)
+
+#     reps, rep_coords = [], []
+#     for rows in buckets.values():
+#         pts = coords[rows]
+#         centroid = pts.mean(0)
+#         winner_row = rows[np.linalg.norm(pts - centroid, axis=1).argmin()]
+#         rep_id = int(idx[winner_row])
+#         reps.append(rep_id)
+#         rep_coords.append(coords[winner_row])
+
+#     rep_coords = np.asarray(rep_coords, int)
+
+#     G = nx.Graph()
+#     G.add_nodes_from((rid, {"pos": tuple(map(int, p))}) for rid, p in zip(reps, rep_coords))
+#     G.graph.update(grid_size=grid_size, connect_radius_factor=connect_radius_factor)
+
+#     if len(reps) > 1:
+#         diffs = rep_coords[:, None, :] - rep_coords[None, :, :]
+#         sqd = (diffs * diffs).sum(2)
+#         thresh2 = (connect_radius_factor * grid_size) ** 2
+#         u, v = np.where(np.triu(sqd, 1) <= thresh2)
+#         G.add_edges_from((reps[i], reps[j]) for i, j in zip(u, v))
+
+#     return G
+
+# # ╔═══════════════════════════════════════════════════════════════════════╗
+# # ║  3.  k‑NN growth driven by bending‑energy minimisation                ║
+# # ╚═══════════════════════════════════════════════════════════════════════╝
+
+# def knn_graph_from_bending_energy_fast(
+#     G: nx.Graph,
+#     mask_bool: np.ndarray,
+#     *,
+#     k: int = 2,
+#     be_limit: float = 2.0,
+#     radius: Optional[float] = None,
+# ) -> nx.Graph:
+#     """Connect isolated nodes under a bending‑energy constraint (fast)."""
+#     if k < 1:
+#         raise ValueError("k must be ≥ 1")
+
+#     grid_size = G.graph.get("grid_size", 3.0)
+#     if radius is None:
+#         radius = 2.0 * grid_size
+
+#     node_pos = nx.get_node_attributes(G, "pos")
+#     nodes = np.fromiter(node_pos, int)
+#     coords = np.asarray([node_pos[n] for n in nodes], float)
+#     tree = cKDTree(coords)
+
+#     # sparse degree heuristic (correct call signature)
+#     S = tree.sparse_distance_matrix(tree, radius * 3.0, output_type="coo_matrix")
+#     if S.nnz:
+#         idx_all = np.hstack((S.row, S.col))
+#         deg = np.bincount(idx_all, minlength=len(nodes))
+#     else:
+#         deg = np.zeros(len(nodes), int)
+#     best_n_ids = list(nodes[np.argsort(deg)[: min(10, len(deg))]])
+
+#     visited: set[int] = set()
+#     alive: set[int] = set(G.nodes)
+
+#     def add_edge(u: int, v: int):
+#         G.add_edge(u, v)
+
+#     def bending_energy(prev_: int, curr_: int, next_: int) -> float:
+#         p0, p1, p2 = map(np.asarray, (node_pos[prev_], node_pos[curr_], node_pos[next_]))
+#         v1, v2 = p0 - p1, p2 - p1
+#         if np.allclose(v1, 0) or np.allclose(v2, 0):
+#             return np.inf
+#         cosang = np.clip(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2)), -1, 1)
+#         return np.arccos(cosang)
+
+#     def free_path(p0: Tuple[int, int], p1: Tuple[int, int]) -> bool:
+#         rr, cc = line(p0[1], p0[0], p1[1], p1[0])
+#         return mask_bool[rr, cc].all()
+
+#     new_path = True
+#     prev_node = current_node = None
+
+#     while True:
+#         zero_deg = [n for n in alive if G.degree[n] == 0]
+#         if len(zero_deg) <= 1:
+#             break
+
+#         if new_path:
+#             # pick a starting isolated node (low degree heuristic first)
+#             prev_node = best_n_ids.pop(0) if best_n_ids else zero_deg[0]
+#             if prev_node not in zero_deg:
+#                 prev_node = zero_deg[0]
+#             visited.add(prev_node)
+
+#             # nearest unvisited neighbour
+#             qpos = node_pos[prev_node]
+#             dist, idx = tree.query(qpos, k=min(2, len(nodes)))
+#             dist = np.atleast_1d(dist)
+#             idx = np.atleast_1d(idx)
+#             cand = [nodes[i] for i, d in zip(idx, dist) if nodes[i] not in visited and d < radius]
+#             if not cand:
+#                 G.remove_node(prev_node)
+#                 alive.discard(prev_node)
+#                 continue
+#             current_node = cand[0]
+#             add_edge(prev_node, current_node)
+#             visited.add(current_node)
+#             new_path = False
+#             continue
+
+#         # extend path ----------------------------------------------------
+#         qpos = node_pos[current_node]
+#         dist, idx = tree.query(qpos, k=min(k + 1, len(nodes)))
+#         dist = np.atleast_1d(dist)
+#         idx = np.atleast_1d(idx)
+#         cand = [nodes[i] for i, d in zip(idx, dist) if nodes[i] not in visited and d < radius]
+#         if not cand:
+#             new_path = True
+#             continue
+
+#         choices = [n for n in cand if bending_energy(prev_node, current_node, n) <= be_limit]
+#         if not choices:
+#             new_path = True
+#             continue
+
+#         for nxt in sorted(choices, key=lambda n: bending_energy(prev_node, current_node, n)):
+#             if free_path(node_pos[current_node], node_pos[nxt]):
+#                 add_edge(current_node, nxt)
+#                 visited.add(nxt)
+#                 prev_node, current_node = current_node, nxt
+#                 break
+#         else:
+#             new_path = True
+
+#     G.remove_nodes_from([n for n in G.nodes if G.degree[n] == 0])
+#     return G
+
+# # alias for backward compatibility
+# knn_graph_from_bending_energy_2 = knn_graph_from_bending_energy_fast
+
+# # ╔═══════════════════════════════════════════════════════════════════════╗
+# # ║  4.  End‑to‑end convenience wrapper                                   ║
+# # ╚═══════════════════════════════════════════════════════════════════════╝
+
+# def dlo_path_graph_from_mask(
+#     mask: np.ndarray,
+#     *,
+#     width_stat: str = "max",
+#     grid_multiplier: float = 3.0,
+#     connect_radius_factor: float = 1.5,
+#     k: int = 2,
+#     be_limit: float = 2.0,
+#     radius: Optional[float] = None,
+# ) -> nx.Graph:
+#     """High‑level convenience: *binary mask* ➜ *final path graph*.
+
+#     Parameters
+#     ----------
+#     mask : (H, W) ndarray, bool / uint8
+#         Binary image where *True/1* marks the DLO pixels.
+#     width_stat : str, default "max"
+#         Statistic used to compute cable diameter (``dlo_width_from_mask``).
+#     grid_multiplier : float, default 3.0
+#         Grid‑cell size = ``grid_multiplier × cable_diameter``.
+#     connect_radius_factor : float, default 1.5
+#         Two representatives within ``factor × grid_size`` get an edge.
+#     k : int, default 2
+#         How many nearest neighbours to *evaluate* when extending the path.
+#     be_limit : float, default 2.0 [rad]
+#         Maximum bending angle allowed when adding an edge.
+#     radius : float or None, default None
+#         Search radius for neighbours; defaults to ``2 × grid_size``.
+
+#     Returns
+#     -------
+#     nx.Graph
+#         The final path/curve graph through the DLO.
+#     """
+#     # 1.  coarse representation
+#     G_simpl = mask_to_simplified_graph(
+#         mask,
+#         width_stat=width_stat,
+#         grid_multiplier=grid_multiplier,
+#         connect_radius_factor=connect_radius_factor,
+#     )
+
+#     # 2.  bending‑energy‑guided connection (works on mask boolean array)
+#     G_paths = knn_graph_from_bending_energy_fast(
+#         G_simpl,
+#         mask.astype(bool),
+#         k=k,
+#         be_limit=be_limit,
+#         radius=radius,
+#     )
+
+#     return G_paths
+
+# # ─────────────────────────────────────────────────────────────────────────
+# # __all__ helper for clean imports
+# # ─────────────────────────────────────────────────────────────────────────
+# __all__ = [
+#     "dlo_width_from_mask",
+#     "mask_to_simplified_graph",
+#     "knn_graph_from_bending_energy_fast",
+#     "knn_graph_from_bending_energy_2",
+#     "dlo_path_graph_from_mask",
+# ]
+
+
+# # # ────────────────────────────────────────────────────────────────────────────────
+# # # Helper – diameter estimate from the binary mask
+# # # ────────────────────────────────────────────────────────────────────────────────
+
+# # def dlo_width_from_mask(
+# #     poses: np.ndarray,          # (N, 2) (y, x) pixel coords – ideally centre‑line
+# #     mask_bin: np.ndarray,       # H×W uint8 / bool, 1 == object
+# #     statistic: Literal["median", "mean", "min", "max"] = "median",
+# # ) -> float:
+# #     """Return characteristic *diameter* of a DLO inside ``mask_bin``.
+
+# #     We sample the Euclidean distance‑transform at the given ``poses`` and
+# #     convert radii → diameters.  The chosen statistic (median/mean/min/max)
+# #     controls robustness.
+# #     """
+# #     if mask_bin.dtype != np.uint8:
+# #         mask_bin = (mask_bin > 0).astype(np.uint8)
+
+# #     # radius (distance) map
+# #     dist = cv2.distanceTransform(mask_bin, cv2.DIST_L2, 5)  # float32 radii
+
+# #     # sample at requested coordinates
+# #     ys, xs = poses[:, 0].astype(int), poses[:, 1].astype(int)
+# #     valid = (
+# #         (ys >= 0) & (ys < mask_bin.shape[0]) &
+# #         (xs >= 0) & (xs < mask_bin.shape[1])
+# #     )
+# #     radii = dist[ys[valid], xs[valid]]
+# #     diameters = radii * 2.0
+
+# #     if diameters.size == 0:
+# #         raise ValueError("No valid centre‑line points inside mask.")
+
+# #     if statistic == "median":
+# #         return float(np.median(diameters))
+# #     if statistic == "mean":
+# #         return float(np.mean(diameters))
+# #     if statistic == "min":
+# #         return float(np.min(diameters))
+# #     if statistic == "max":
+# #         return float(np.max(diameters))
+# #     raise ValueError("statistic must be one of 'median', 'mean', 'min', 'max'")
+
+# # # ────────────────────────────────────────────────────────────────────────────────
+# # # Main – "mask ➜ simplified graph" with *automatic* grid sizing
+# # # ────────────────────────────────────────────────────────────────────────────────
+
+# # def mask_to_simplified_graph(
+# #     mask: np.ndarray,
+# #     *,
+# #     width_stat: Literal["median", "mean", "min", "max"] = "max",
+# #     grid_multiplier: float = 3.0,
+# #     connect_radius_factor: float | None = None,
+# #     return_mapping: bool = False,
+# # ):
+# #     """Fastest route from binary *mask* ➜ sparsified graph *with auto params*.
+
+# #     The grid cell size is derived automatically from the estimated cable
+# #     diameter:
+
+# #     ``grid_size = grid_multiplier × width_px``
+
+# #     If ``connect_radius_factor`` is not given, it defaults to **1.5**.
+
+# #     Parameters
+# #     ----------
+# #     mask : (H, W) bool / uint8 array
+# #         Foreground == True / 1.
+# #     width_stat : {"median", "mean", "min", "max"}, default "max"
+# #         Statistic used when estimating the cable diameter.
+# #     grid_multiplier : float, default 3.0
+# #         How many *diameters* wide each grid cell should be.
+# #     connect_radius_factor : float or None, default None
+# #         Representatives closer than ``factor × grid_size`` are connected.
+# #         If *None*, defaults to **1.5**.
+# #     return_mapping : bool, default False
+# #         If True, also return ``{flat_pixel_index: rep_node_id}``.
+
+# #     Returns
+# #     -------
+# #     G : nx.Graph
+# #         Graph over representative pixels only.
+# #     node_to_rep : dict[int, int]        # only if return_mapping=True
+# #     """
+# #     mask_bool = mask.astype(bool)
+# #     if not mask_bool.any():
+# #         return (nx.Graph(), {}) if return_mapping else nx.Graph()
+
+# #     # ── 1. estimate cable diameter (in *pixels*) --------------------------
+# #     foreground_yx = np.column_stack(np.nonzero(mask_bool))  # (N, 2) (y, x)
+# #     width_px = dlo_width_from_mask(foreground_yx, mask_bool.astype(np.uint8), width_stat)
+
+# #     # grid size & connection radius
+# #     grid_size = max(grid_multiplier * width_px, 1.0)
+# #     if connect_radius_factor is None:
+# #         connect_radius_factor = 1.5
+
+# #     # ── 2. foreground pixel coordinates -----------------------------------
+# #     H, W = mask.shape
+# #     idx  = np.flatnonzero(mask_bool.ravel())                # 1‑D indices  (N,)
+# #     xs   = idx % W
+# #     ys   = idx // W
+# #     coords = np.column_stack((xs, ys))                      # (N, 2), int64
+
+# #     # ── 3. assign each pixel to a grid cell -------------------------------
+# #     cells = np.floor_divide(coords, grid_size,
+# #                             # dtype=int
+# #                             )   # (N, 2)
+# #     buckets = defaultdict(list)
+# #     for i, cell in enumerate(map(tuple, cells)):
+# #         buckets[cell].append(i)
+
+# #     # ── 4. choose one representative per populated cell -------------------
+# #     reps, rep_coords = [], []              # node IDs & positions
+# #     node_to_rep = {} if return_mapping else None
+
+# #     for pix_rows in buckets.values():
+# #         pts = coords[pix_rows]
+# #         centroid = pts.mean(axis=0)
+# #         dists = np.linalg.norm(pts - centroid, axis=1)
+# #         winner_row = pix_rows[int(dists.argmin())]
+# #         rep_id = int(idx[winner_row])      # flat index is the node id
+# #         reps.append(rep_id)
+# #         rep_coords.append(coords[winner_row])
+# #         if return_mapping:
+# #             for r in pix_rows:
+# #                 node_to_rep[int(idx[r])] = rep_id
+
+# #     rep_coords = np.asarray(rep_coords, dtype=int)          # (M, 2)
+
+# #     # ── 5. build graph over representatives only --------------------------
+# #     G = nx.Graph()
+# #     G.add_nodes_from(
+# #         (rep, {"pos": tuple(int(v) for v in xy)})
+# #         for rep, xy in zip(reps, rep_coords)
+# #     )
+
+# #     # # connect close representatives
+# #     # if len(reps) > 1:
+# #     #     diffs   = rep_coords[:, None, :] - rep_coords[None, :, :]
+# #     #     sq_dist = (diffs * diffs).sum(axis=2)
+# #     #     thresh2 = (connect_radius_factor * grid_size) ** 2
+# #     #     u, v = np.where(np.triu(sq_dist, k=1) <= thresh2)
+# #     #     G.add_edges_from((reps[i], reps[j]) for i, j in zip(u, v))
+
+# #     return (G, node_to_rep) if return_mapping else G
+
+
 
 def binary_mask_to_graph_indexed(mask):
     
@@ -110,7 +548,7 @@ def knn_graph_from_bending_energy_2(
     idx = np.argpartition(deg, n)[:n]                 # O(N), no full sort
     idx = idx[np.argsort(deg[idx])]                   # now in ascending order
     best_n_ids = list(nodes[idx])                           # the actual node IDs
-    print(best_n_ids, deg[idx])
+    # print(best_n_ids, deg[idx])
     
     path       = []
     visited     = set()
@@ -128,31 +566,31 @@ def knn_graph_from_bending_energy_2(
         # --------------------------------------------------------------
         if new_path:
             
-            if len(path) > 0:
-                print("Path: ", path)
-                print("Length of path: ", len(path))
-                pos = nx.get_node_attributes(G, 'pos')
-                nx.draw(G, pos=pos, node_size=5, edge_color='red', with_labels=True)
+            # if len(path) > 0:
+            #     print("Path: ", path)
+            #     print("Length of path: ", len(path))
+            #     pos = nx.get_node_attributes(G, 'pos')
+            #     nx.draw(G, pos=pos, node_size=5, edge_color='red', with_labels=True)
                 
-                plt.pause(0.01)
+            #     plt.pause(0.01)
             
-            print("\n--------------------- New Path ----------------------------\n")
+            # print("\n--------------------- New Path ----------------------------\n")
 
             path       = []
-            print("Zero degree nodes: ", zero_deg)
-            print("Length of zero degree nodes: ", len(zero_deg))
-            print("Best nodes: ", best_n_ids)
+            # print("Zero degree nodes: ", zero_deg)
+            # print("Length of zero degree nodes: ", len(zero_deg))
+            # print("Best nodes: ", best_n_ids)
             if len(best_n_ids) == 0:
-                print("No more best nodes")
+                # print("No more best nodes")
                 prev_node = zero_deg[0]
-                print("Best node: ", prev_node)
+                # print("Best node: ", prev_node)
             while len(best_n_ids) > 0:
     
                 prev_node = best_n_ids.pop(0)
                 if prev_node not in zero_deg:
                     prev_node = zero_deg[0]
                 else:
-                    print("Best node: ", prev_node)
+                    # print("Best node: ", prev_node)
                     break
 
 
@@ -169,7 +607,7 @@ def knn_graph_from_bending_energy_2(
                     ]
 
             if not cand:          # no way to start – leave the loop
-                print("No candidate found to start a new path for node. removing node.", prev_node)
+                # print("No candidate found to start a new path for node. removing node.", prev_node)
                 G.remove_node(prev_node)
                 alive.discard(prev_node)   
                 continue
@@ -192,7 +630,7 @@ def knn_graph_from_bending_energy_2(
         if not cand:              # dead end → start a fresh path
             paths.append(path)
             new_path = True
-            print("No candidate found to extend the path")
+            # print("No candidate found to extend the path")
             continue
 
         # pick the candidate with the **smallest bending energy**
@@ -208,7 +646,7 @@ def knn_graph_from_bending_energy_2(
         if not be_vals:           # all too “bendy” → start anew
             paths.append(path)
             new_path = True
-            print("No candidate found to big bending energy")
+            # print("No candidate found to big bending energy")
             continue
 
         best = min(be_vals, key=be_vals.get)
@@ -232,7 +670,7 @@ def knn_graph_from_bending_energy_2(
                 prev_node, current_node = current_node, best
                 break
             else:
-                print("Line between {} and {} is not in the graph.".format(current_node, best))
+                # print("Line between {} and {} is not in the graph.".format(current_node, best))
                 continue
         if len(best_list) == 0:
             paths.append(path)
@@ -401,13 +839,13 @@ def connect_leaf_nodes(G: nx.Graph, be_limit=2.0) -> nx.Graph:
     leaf_nodes = [n for n in G.nodes if G.degree[n] == 1]
     if len(leaf_nodes) < 2:
         return G
-    subG = G.subgraph(leaf_nodes)
+    # subG = G.subgraph(leaf_nodes)
     # ---- 2. Build KD‑tree for O(N log N) neighbour look‑ups only of one degree nodes---------------
-    pos_dict = nx.get_node_attributes(subG, "pos")
-    nodes = np.fromiter(pos_dict.keys(), dtype=int)
-    coords = np.array([pos_dict[n] for n in nodes], dtype=float)
+    # pos_dict = nx.get_node_attributes(subG, "pos")
+    # nodes = np.fromiter(pos_dict.keys(), dtype=int)
+    # coords = np.array([pos_dict[n] for n in nodes], dtype=float)
     
-    tree = cKDTree(coords)
+    # tree = cKDTree(coords)
     visited = set()
     # find closest leaf nodes
     for node_1 in leaf_nodes:
@@ -428,8 +866,8 @@ def connect_leaf_nodes(G: nx.Graph, be_limit=2.0) -> nx.Graph:
 
             vector = np.array(node_2_pos) - np.array(node_1_pos)
             dist = np.linalg.norm(vector)
-            # if dist > 20:
-            #     continue
+            if dist > 70:
+                continue
             nb_1 = list(G.neighbors(node_1))[0]
             be ,same_line = calc_be(G,node_1, nb_1, node_2)
             if same_line:
@@ -480,7 +918,7 @@ def prune_short_branches(G: nx.Graph, min_length: int = 5) -> nx.Graph:
                 path = nx.shortest_path(G, source=node_1, target=node_2)
             except nx.NetworkXNoPath:
                 continue # no path between the two nodes
-        print("Path{}".format(path))
+        # print("Path{}".format(path))
         visited.add(path[-1])
         if len(path) <= min_length:
             # remove the path
