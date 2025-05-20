@@ -1,7 +1,10 @@
 [submodule "src/Grounded-SAM-2"]
 	path = src/Grounded_SAM_2
 	url = https://github.com/IDEA-Research/Grounded-SAM-2
+[submodule "src/FoundationStereo"]
+	path = src/FoundationStereo
+	url = https://github.com/NVlabs/FoundationStereo.git
 
-[submodule "src/segment-anything-2-real-time"]
-	path = src/segment-anything-2-real-time
+[submodule "src/segment_anything_2_real_time"]
+	path = src/segment_anything_2_real_time
 	url = https://github.com/Gy920/segment-anything-2-real-time.git

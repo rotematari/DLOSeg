@@ -36,8 +36,8 @@ class Segmentor:
         elif "sam2_video" in self.models:
             sam_predictor = build_sam2_video_predictor(sam_cfg, sam_checkpoint, device=self.device)
         elif "sam2_image" in self.models:
-            
-            sam2_model = build_sam2(sam_cfg, sam_checkpoint, device=device)
+            # Load the SAM2 model
+            sam2_model = build_sam2(sam_cfg, sam_checkpoint, device=self.device)
 
             sam_predictor = SAM2ImagePredictor(sam2_model)
         # Load the Grounding DINO model
@@ -56,21 +56,7 @@ class Segmentor:
         return sam_predictor, gdino_predictor
 
     
-    def segment(self, data):
-        # Preprocess the data
-        data = self.preprocess(data)
-
-        # Move the data to the device
-        data = data.to(self.device)
-
-        # Run the model
-        with torch.no_grad():
-            output = self.model(data)
-
-        # Postprocess the output
-        output = self.postprocess(output)
-
-        return output
+    
     def load_image(self, image_path):
 
         self.img_source, self.dino_ready_img = load_image(image_path)
@@ -117,8 +103,8 @@ if __name__ == "__main__":
     configs ={
         
         "sam2":{
-            "checkpoint": "/home/admina/segmetation/DLOSeg/src/segment_anything_2_real_time/checkpoints/sam2.1_hiera_small.pt",
-            "config": "configs/sam2.1/sam2.1_hiera_s.yaml"
+            "checkpoint": "/home/admina/segmetation/DLOSeg/src/segment_anything_2_real_time/checkpoints/sam2.1_hiera_large.pt",
+            "config": "configs/sam2.1/sam2.1_hiera_l.yaml"
         },
         "grounding_dino":{
             "config":"src/Grounded_SAM_2/grounding_dino/groundingdino/config/GroundingDINO_SwinT_OGC.py",
