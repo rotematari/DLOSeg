@@ -8,3 +8,6 @@
 [submodule "src/segment_anything_2_real_time"]
 	path = src/segment_anything_2_real_time
 	url = https://github.com/Gy920/segment-anything-2-real-time.git
+[submodule "src/handloom"]
+	path = src/handloom
+	url = https://github.com/vainaviv/handloom.git
