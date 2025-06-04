@@ -1,7 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from util import extractSinandCos, computeEdges, computeKB, quaternion_q, computeW, skew_symmetric, scalar_func, quaternion_rotation, quaternion_rotation_parallel, computeKB_numpy, extractSinandCos_numpy, quaternion_rotation_numpy, computeW_numpy
+from der.dder.util import *
+from der.dder.util import extractSinandCos, computeEdges, computeKB, quaternion_q, computeW, skew_symmetric, scalar_func, quaternion_rotation, quaternion_rotation_parallel, computeKB_numpy, extractSinandCos_numpy, quaternion_rotation_numpy, computeW_numpy
 import theseus as th
 import numpy as np
 
@@ -11,7 +12,6 @@ class DEFORM_func(nn.Module):
         """
         Parameters:
         n_vert: number of vertices
-        n_edge: number of edges 
         device: cpu/cuda
         bend_stiffness: bending learnable material properties
         twist_stiffness: twisting learnable material properties

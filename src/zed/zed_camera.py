@@ -18,9 +18,9 @@ class ZedCamera:
     ZED camera handler with real-time visualization capabilities
     """
     def __init__(self,
-                 resolution=sl.RESOLUTION.HD720,
+                 resolution=sl.RESOLUTION.HD2K,  # or HD1080, HD720, etc.
                  fps=30,
-                 depth_mode=sl.DEPTH_MODE.ULTRA,  # or NEURAL, NEURAL_PLUS
+                 depth_mode=sl.DEPTH_MODE.NEURAL_PLUS,  # or NEURAL, NEURAL_PLUS
                  coordinate_units=sl.UNIT.METER,
                  depth_min_distance=0.4,
                  depth_max_distance=10.0,
@@ -64,8 +64,9 @@ class ZedCamera:
         # Runtime parameters
         self.runtime_params = sl.RuntimeParameters()
         # self.runtime_params.sensing_mode = sl.SENSING_MODE.STANDARD
-        self.runtime_params.confidence_threshold = 50
+        self.runtime_params.confidence_threshold = 100
         self.runtime_params.measure3D_reference_frame = sl.REFERENCE_FRAME.WORLD
+        
         
         # Camera state
         self.is_open = False
@@ -84,7 +85,8 @@ class ZedCamera:
         
         # segmentation masks should be a tuple of (time, mask)
         self.segmented_mask = None
-
+        self.count = 0
+        self.tot_time = 0
     def open(self):
         """
         Open the ZED camera with configured parameters
@@ -185,32 +187,32 @@ class ZedCamera:
             Whether to display point cloud
         """
         image_np, depth_np, point_cloud_np = self.grab_frame()
+
         if image_np is None:
             return
-            
+        try:
+            seg_time = time.time()
+            # Segment the image
+            source_image, sam_input_boxes,sam_mask = self.segment_image(image_np)
+            self.count += 1
+            self.tot_time += time.time() - seg_time
+
+            if self.count > 100:
+                print(f"Average segmentation time: {self.tot_time / self.count:.2f} seconds")
+                self.count = 0
+                self.tot_time = 0
+
+            if len(sam_mask.shape) == 3:
+                sam_mask = sam_mask.squeeze() 
+        except Exception as e:
+            print(f"Error during segmentation: {e}")
+            sam_mask = None
         # Display RGB image
         if image:
-            if segment:
-                # Segment the image using the segmentor
-                # print("Segmenting image...")
-                try:
-                    source_image, sam_input_boxes,sam_mask = self.segment_image(image_np)
-                    if len(sam_mask.shape) == 3:
-                        sam_mask = sam_mask.squeeze()  
-                    # Display segmented image
-                    # cv2.imshow(self.image_vis_window, source_image)
-                    try:
-                        cv2.namedWindow("Segmented Image", cv2.WINDOW_NORMAL)
-                        cv2.resizeWindow("Segmented Image", 1500, 840)
-                        cv2.imshow("Segmented Image", sam_mask)
-                        # cv2.imshow("Segmented Image", sam_input_boxes)
-                    except Exception as e:
-                        print(f"no valide mask: {e}")
-                except Exception as e:
-                    print(f"Error during segmentation: {e}")
-                    # cv2.imshow(self.image_vis_window, image_np)
-            # cv2.imshow(self.image_vis_window, image_np)
             
+            cv2.namedWindow("Segmented Image", cv2.WINDOW_NORMAL)
+            cv2.resizeWindow("Segmented Image", 1500, 840)
+            cv2.imshow("Segmented Image", sam_mask)
             
         # Display depth map
         if depth:
@@ -382,9 +384,9 @@ class ZedCamera:
             self.pc_vis.add_geometry(new_pcd)
             self.pcd_geometry = new_pcd  # Store reference
             
-            # Add coordinate frame
-            self.frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.3)
-            self.pc_vis.add_geometry(self.frame)
+            # # Add coordinate frame
+            # self.frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.3)
+            # self.pc_vis.add_geometry(self.frame)
             
             # Set initial view to isometric
             view_control = self.pc_vis.get_view_control()
@@ -392,8 +394,9 @@ class ZedCamera:
             
             # Set rendering options for better visualization
             render_option = self.pc_vis.get_render_option()
-            render_option.point_size = 2.0  # Larger points
-            render_option.background_color = np.array([0.1, 0.1, 0.1])  # Dark background
+            render_option.point_size = 1.0  # Larger points
+            render_option.background_color = np.array([255, 255, 255])  # White background
+            render_option.show_coordinate_frame = True  # Show coordinate frame
         else:
             # Copy data to existing point cloud
             self.pcd_geometry.points = new_pcd.points
@@ -436,7 +439,6 @@ class ZedCamera:
         # Start streaming thread
         stream_thread = Thread(
             target=self._streaming_loop,
-            
             args=(show_image, show_depth, show_point_cloud, fps),
             daemon=True
         )
@@ -687,9 +689,9 @@ if __name__ == "__main__":
     time.sleep(0.5)
     # Example usage
     zed = ZedCamera(
-        resolution=sl.RESOLUTION.HD2K,
+        resolution=sl.RESOLUTION.HD720,
         depth_mode=sl.DEPTH_MODE.NEURAL_PLUS,
-        fps=30
+        fps=60
     )
 
     zed.set_up_segmentor(segmentor)
