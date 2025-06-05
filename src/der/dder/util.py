@@ -53,7 +53,9 @@ def computeKB(edges, m_restEdgeL):
     discrete curvature binormal: DER paper eq 1
     """
     o_kb = torch.zeros_like(edges)
-    o_kb[:, 1:] = torch.clamp(2 * torch.cross(edges[:, :-1], edges[:, 1:], dim=2) / (m_restEdgeL[:, :-1] * m_restEdgeL[:, 1:] + (edges[:, :-1] * edges[:, 1:]).sum(dim=2)).unsqueeze(dim=2), min=-20, max=20)
+    o_kb[:, 1:] = torch.clamp(2 * torch.cross(edges[:, :-1], edges[:, 1:], dim=2)  
+                                / (m_restEdgeL[:, :-1] * m_restEdgeL[:, 1:] \
+                                + (edges[:, :-1] * edges[:, 1:]).sum(dim=2)).unsqueeze(dim=2), min=-20, max=20)
     return o_kb
 
 def computeKB_numpy(edges, m_restEdgeL):
@@ -69,6 +71,9 @@ def quaternion_q(theta, kb):
     return torch.cat((theta.unsqueeze(dim=2), kb), dim=2)
 
 def quaternion_p(theta, kb):
+    """
+    form quaternion coordinates for rotation
+    """
     return torch.cat((theta, kb), dim=1)
 
 

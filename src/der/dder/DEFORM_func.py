@@ -68,7 +68,10 @@ class DEFORM_func(nn.Module):
         sinPhi, cosPhi = extractSinandCos(magnitude)
         q = quaternion_q(cosPhi, sinPhi.unsqueeze(dim=2) * F.normalize(kb, dim=2))
         for i in range(1, self.n_edge):
-            b_u = torch.cat((b_u, torch.where(torch.ones(batch, 1).to(self.device) - cosPhi[:, i].unsqueeze(dim=1) <= self.err * torch.ones(batch, 1).to(self.device), b_u[:, i - 1], quaternion_rotation(b_u, edges, q, i)[0][:, 0, :]).unsqueeze(dim=1)), dim=1)
+            b_u = torch.cat((b_u,
+            torch.where(torch.ones(batch, 1).to(self.device) - cosPhi[:, i].unsqueeze(dim=1) <= self.err * torch.ones(batch, 1).to(self.device), 
+            b_u[:, i - 1], 
+            quaternion_rotation(b_u, edges, q, i)[0][:, 0, :]).unsqueeze(dim=1)), dim=1)
             b_v = torch.cat((b_v, torch.where(torch.ones(batch, 1).to(self.device) - cosPhi[:, i].unsqueeze(dim=1) <= self.err * torch.ones(batch, 1).to(self.device), b_v[:, i - 1], quaternion_rotation(b_u, edges, q, i)[1][:, 0, :]).unsqueeze(dim=1)), dim=1)
         return b_u, b_v, kb
 
