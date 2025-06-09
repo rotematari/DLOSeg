@@ -61,13 +61,23 @@ class DEFORM_func(nn.Module):
         kb: discrete curvature binormal
         """
         batch = edges.size()[0]
+        # all the kbs
         kb = computeKB(edges, restEdgeL) # DER paper: discrete curvature binormal: DER paper eq 1
+        
         b_u = u0.unsqueeze(dim=1)
+        # direction for the first edge's bishop frame v
         b_v = F.normalize(torch.cross(edges[:, 0], b_u[:, 0], dim=1)).unsqueeze(dim=1)
+        # ||kb||^2 = k_x^2 + k_y^2 + k_z^2
         magnitude = (kb * kb).sum(dim=2)
+        
         sinPhi, cosPhi = extractSinandCos(magnitude)
-        q = quaternion_q(cosPhi, sinPhi.unsqueeze(dim=2) * F.normalize(kb, dim=2))
+        # q = cos(phi/2) + sin(phi/2) * (k_x, k_y, k_z)
+        q = quaternion_q(cosPhi, 
+                         sinPhi.unsqueeze(dim=2) * F.normalize(kb, dim=2) 
+                        )
+        
         for i in range(1, self.n_edge):
+            
             b_u = torch.cat((b_u,
             torch.where(torch.ones(batch, 1).to(self.device) - cosPhi[:, i].unsqueeze(dim=1) <= self.err * torch.ones(batch, 1).to(self.device), 
             b_u[:, i - 1], 

@@ -12,7 +12,7 @@ N_VERT = 13
 N_EDGE = N_VERT - 1
 sim = DEFORM_sim(N_VERT, N_EDGE, pbd_iter=5, device=DEVICE).to(DEVICE)
 
-current_vert = sim.rest_vert.clone()
+current_vert = sim.rest_vert
 current_vel = torch.zeros_like(current_vert, device=DEVICE)
 init_direction = torch.tensor([[[0.0, 0.0, 1.0]]], device=DEVICE)
 
@@ -24,7 +24,7 @@ m_u0 = sim.DEFORM_func.compute_u0(computeEdges(current_vert)[:,0], init_directio
 
 trajectories = [current_vert.squeeze().cpu()]
 for _ in range(50):
-    input_pos = current_vert[:, clamped_selection].clone()
+    input_pos = current_vert[:, clamped_selection]
     current_vert, current_vel, theta_full = sim(
         current_vert, current_vel, init_direction, clamped_index,
         m_u0, input_pos, clamped_selection, theta_full, mode="evaluation"

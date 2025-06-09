@@ -56,6 +56,7 @@ def computeKB(edges, m_restEdgeL):
     o_kb[:, 1:] = torch.clamp(2 * torch.cross(edges[:, :-1], edges[:, 1:], dim=2)  
                                 / (m_restEdgeL[:, :-1] * m_restEdgeL[:, 1:] \
                                 + (edges[:, :-1] * edges[:, 1:]).sum(dim=2)).unsqueeze(dim=2), min=-20, max=20)
+    # TODO: what is the shape of this output?
     return o_kb
 
 def computeKB_numpy(edges, m_restEdgeL):
@@ -68,6 +69,7 @@ def computeKB_numpy(edges, m_restEdgeL):
 def quaternion_q(theta, kb):
     # form quaternion coordinates for rotation
     # output dim = batch x selected_edge x 3
+    # w, x, y, z
     return torch.cat((theta.unsqueeze(dim=2), kb), dim=2)
 
 def quaternion_p(theta, kb):
