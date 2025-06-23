@@ -4,6 +4,48 @@ from scipy import interpolate
 import numpy as np
 from scipy.interpolate import UnivariateSpline
 import time
+from scipy.interpolate import splprep, splev
+from scipy.signal import savgol_filter
+def smooth_2d_branch_savgol(coords: np.ndarray,
+                            window_length: int = 11,
+                            polyorder: int = 2) -> np.ndarray:
+    """
+    Smooth a 2D branch using a Savitzky-Golay filter.
+
+    This is a very fast method for smoothing noisy data.
+    """
+    # Ensure window_length is odd and less than the number of points
+    window_length = min(window_length, len(coords) - 1)
+    if window_length % 2 == 0:
+        window_length += 1
+
+    # Apply the filter to each dimension separately
+    x_smooth = savgol_filter(coords[:, 0], window_length, polyorder)
+    y_smooth = savgol_filter(coords[:, 1], window_length, polyorder)
+
+    return np.vstack((x_smooth, y_smooth)).T
+def smooth_2d_branch_splprep(coords: np.ndarray,
+                             s: float = 0,
+                             num_samples: int = 10) -> np.ndarray:
+    """
+    Smooth/interpolate a 2D branch using a parametric B-spline.
+
+    This is often faster than fitting two separate UnivariateSplines.
+    """
+    # 1) Unpack coordinates
+    x, y = coords.T
+
+    # 2) Fit a parametric spline
+    # splprep returns the B-spline representation (tck) and the parameterization (u)
+    tck, u = splprep([x, y], s=s)
+
+    # 3) Evaluate the spline at new parameter values
+    M = num_samples or len(coords)
+    u_new = np.linspace(u.min(), u.max(), M)
+    x_new, y_new = splev(u_new, tck)
+
+    return np.vstack((x_new, y_new)).T
+
 def smooth_2d_branch(coords: np.ndarray,
                      s: float = 0,
                      num_samples: int = None,
@@ -28,23 +70,23 @@ def smooth_2d_branch(coords: np.ndarray,
     t = np.concatenate(([0], np.cumsum(dists)))
     t /= t[-1]
 
-    # 2) choose output parameter values
     M = num_samples or len(coords)
     t_new = np.linspace(0, 1, M)
-
-    # 3) fit & evaluate separate splines for x(t) and y(t)
-    
     out = np.zeros((M, 2))
+
     for i, dim in enumerate((0, 1)):
-        spl = UnivariateSpline(t, coords[:, dim], s=s)
+        # Determine spline degree: at most 3, but less if not enough points
+        k = min(3, len(coords) - 1)
+        if k < 1:
+            # Not enough points to even fit a linear spline
+            out[:, dim] = np.repeat(coords[0, dim], M)
+            continue
+        spl = UnivariateSpline(t, coords[:, dim], k=k, s=s)
         out[:, dim] = spl(t_new)
-    # 4) round to int the output and delete duplicate points
-    # out = np.round(out).astype(np.int32)
-    # out = np.unique(out[::jump], axis=0)
     return out
 
 
-def fit_bspline(points):
+def fit_bspline(points,n_points=100,k=3):
     """
     Fit a B-spline to 2D data points.
     
@@ -61,10 +103,10 @@ def fit_bspline(points):
     """
     # Extract x and y coordinates
 
-    spl , u = interpolate.splprep(points.T, k = 3,s = len(points)*1e-4)
+    spl , u = interpolate.splprep(points.T, k = k,s = len(points)*1e-4)
     
     # Generate points along the B-spline
-    u_fine = np.linspace(0, 1, 1000)
+    u_fine = np.linspace(0, 1, n_points)
     
     fitted_points = np.array(interpolate.splev(u_fine, spl)).T
     

@@ -44,6 +44,7 @@ class DLOGraph:
         self._coords_array = None
         self._nodes_array = None
         self._mask_bool = None
+        self.full_bspline = None
 
 
 
@@ -74,7 +75,26 @@ class DLOGraph:
         # print(f"Mask padding completed in {time.time() - padd_time:.3f} seconds")
         
         
+        # --- Dilation and Erosion ---
+
+        # 1. Define a kernel
+        # This is a structuring element that determines the nature of the operation.
+        # A common choice is a rectangular or elliptical kernel.
+        # cv2.getStructuringElement(shape, size)
+        # Shape can be: cv2.MORPH_RECT, cv2.MORPH_CROSS, cv2.MORPH_ELLIPSE
+        kernel_size = 3
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
+
+        # 2. Apply Dilation
+        # Dilation expands the white regions in the mask.
+        self.mask_bool = cv2.dilate(self.mask_bool, kernel, iterations=1)
+
+        # 3. Apply Erosion
+        # Erosion shrinks the white regions in the mask.
+        self.mask_bool = cv2.erode(self.mask_bool, kernel, iterations=2)
         
+        # plt.figure(figsize=(10, 8))
+        # plt.imshow(self.mask_bool, cmap='gray')
         # Extract foreground pixels
         # self.dlo_pixels = np.column_stack(np.nonzero(self.mask_bool))
         # Make it [x, y] order to match coords
@@ -215,31 +235,60 @@ class DLOGraph:
         """
         prune leaf branches longer than max_length
         """
-        def _prune_short_branches(G: nx.Graph, max_length: int) -> None:
+        def _prune_short_branches(G: nx.Graph, min_length: int) -> None:
             """
-            Prune branches longer than max_length
+            Prunes short, dead-end branches from a graph.
+
+            A branch is a path of nodes with degree 2, ending in a leaf node (degree 1).
+            This function removes branches where the path length is less than `min_length`.
+
+            Args:
+                G: The graph to prune, modified in-place.
+                min_length: The minimum number of nodes a branch must have to be kept.
+                            A branch of length 1 is a single leaf connected to a junction.
             """
-
-            to_remove = []
-            # get leaf nodes
-            leaf_nodes = [n for n in self.G.nodes if self.G.degree[n] == 1]
-
+            # Use a set for efficient additions and membership testing
+            nodes_to_prune = set()
             
+            # A set to ensure we don't traverse the same branch from different ends
+            visited_branch_nodes = set()
+
+            # Find all leaf nodes (degree 1) to start our traversals from
+            leaf_nodes = [n for n in G.nodes if G.degree[n] == 1]
+
             for leaf in leaf_nodes:
+                if leaf in visited_branch_nodes:
+                    continue
+
                 path = [leaf]
+                curr = leaf
+                prev = None
+
                 while True:
-                    # traverse the branch
-                    neighbor = list(self.G.neighbors(path[-1]))
-                    if len(neighbor) == 1 and self.G.degree[neighbor[0]] == 2:
-                        path.append(neighbor[0])
-                    else:
+                    # Mark the current node as visited for this branch traversal
+                    visited_branch_nodes.add(curr)
+                    
+                    # Find the next node in the path that isn't the previous one
+                    neighbors = [n for n in G.neighbors(curr) if n != prev]
+
+                    # A proper branch node has exactly one "forward" neighbor and a degree of 2.
+                    # The starting leaf has a degree of 1.
+                    # If we find more than one neighbor, or the neighbor has a degree > 2,
+                    # we've hit a junction and the end of the branch.
+                    if len(neighbors) != 1 or G.degree(neighbors[0]) != 2:
+                        # End of the branch found
                         break
-                    if len(path) > max_length:
-                        break
-                if len(path) < max_length:
-                    to_remove.extend(path)
-            # remove the nodes
-            self.G.remove_nodes_from(to_remove)
+
+                    prev = curr
+                    curr = neighbors[0]
+                    path.append(curr)
+
+                # After finding the full branch, check if it's too short
+                if len(path) < min_length:
+                    nodes_to_prune.update(path)
+
+            # Remove all identified short-branch nodes at once
+            G.remove_nodes_from(nodes_to_prune)
             
         _prune_short_branches(self.G, max_length)
         junction_nodes = [n for n in self.G.nodes if self.G.degree[n] > 2]
@@ -357,13 +406,23 @@ class DLOGraph:
         smoothed_branches = []
         
         for i, coords in enumerate(branches_coords):
-            if len(coords) < 3:
+            if len(coords) < 5:
                 # Skip branches that are too short to fit a spline
                 continue
-            smooth_2d_branch = bspline_fitting.smooth_2d_branch(
+            # smooth_2d_branch = bspline_fitting.smooth_2d_branch_splprep(coords=coords,
+            #     s=smoothing,
+            #     num_samples=max_num_points
+            # )
+            polyorder = 3
+            if len(coords)//2 > polyorder :
+                window_length = len(coords)//2
+            else:
+                window_length = polyorder + 1
+            smooth_2d_branch = bspline_fitting.smooth_2d_branch_savgol(
                 coords=coords,
-                s=smoothing,
-                num_samples=max_num_points
+                window_length=window_length, 
+                polyorder=polyorder,
+
             )
             smoothed_branches.append(smooth_2d_branch)
         
@@ -434,8 +493,162 @@ class DLOGraph:
         
         return most_isolated_node
     
+    def _find_path(self, start_node: int, end_node: int) -> List[int]:
+        """
+        Find a path between two nodes in the graph using Dijkstra's algorithm.
+        
+        Parameters:
+        -----------
+        start_node : int
+            The starting node ID
+        end_node : int
+            The ending node ID
+        
+        Returns:
+        --------
+        List[int]
+            A list of node IDs representing the path from start to end
+        """
+        try:
+            return nx.shortest_path(self.G, source=start_node, target=end_node)
+        except nx.NetworkXNoPath:
+            logging.warning(f"No path found between {start_node} and {end_node}.")
+            return []
     
+    def fit_bspline_to_graph(self):
+        
+        
+        
+        # get leaf nodes
+        leaf_nodes = [n for n in self.G.nodes if self.G.degree[n] == 1]
+        
+        if len(leaf_nodes) != 2:
+            logging.warning(f"Cannot fit B-spline: expected exactly 2 leaf nodes, found {len(leaf_nodes)}.")
+            return
+        path = self._find_path(leaf_nodes[0], leaf_nodes[1])
+        # print(f"Fitting B-spline to path with {len(path)} nodes.")
+        
+        path_coords = np.array([self.G.nodes[n]["pos"] for n in path])
+        
+        
+        spl, fitted_points = bspline_fitting.fit_bspline(path_coords,n_points=500,k=5)
+        # print(f"Fitted B-spline with {len(fitted_points)} points.")
+        
+
+        
+        self.full_bspline = fitted_points
+        print(f"Fitted B-spline with {len(fitted_points)} points.")
+        
     def reconstruct_dlo(self):
+        """
+        Reconnects disjointed graph fragments into a single continuous DLO.
+
+        This method intelligently adds edges between leaf nodes (endpoints) of different
+        fragments by finding pairs that are geometrically well-aligned, minimizing
+        the bending energy of the connection.
+        """
+        # 1. Gather all leaf nodes and their properties.
+        all_leaf_nodes = {n for n in self.G.nodes if self.G.degree[n] == 1}
+        if len(all_leaf_nodes) < 2:
+            print("Not enough leaf nodes to reconstruct.")
+            return
+
+        comp_id_map = {n: i for i, c in enumerate(nx.connected_components(self.G)) for n in c}
+        leaf_pairs = {}
+        for n1 in all_leaf_nodes:
+            for n2 in all_leaf_nodes:
+                if n1 != n2 and comp_id_map.get(n1) == comp_id_map.get(n2):
+                    leaf_pairs[n1] = n2
+                    break
+        
+        available_leaves = set(all_leaf_nodes)
+
+        # 2. Determine the initial starting node using the requested method.
+        # This finds the globally most isolated leaf node to start the process.
+        most_isolated_leaf = self._find_most_isolated_leaf_node_by_nearest_neighbor()
+
+        if most_isolated_leaf is None or most_isolated_leaf not in leaf_pairs:
+            print("Could not determine a valid starting fragment.")
+            return
+
+        # The reconstruction will start from the other end of the most isolated fragment.
+        start_node = leaf_pairs[most_isolated_leaf]
+        
+        # 3. Iteratively connect the best-aligned fragments.
+        while len(available_leaves) > 2:
+            # Check if the designated start_node is still available to be connected.
+            if start_node not in available_leaves:
+                # This happens if the graph is fully connected or we are left with
+                # disjoint fragments that cannot be connected. We can safely stop.
+                break
+
+            # 4. Find the best candidate to connect to.
+            start_pos = np.array(self.G.nodes[start_node]["pos"])
+            start_node_nbr = next(iter(self.G.neighbors(start_node)), None)
+            if start_node_nbr is None:
+                available_leaves.discard(start_node)
+                continue
+
+            tan0 = self._unit(start_pos - np.array(self.G.nodes[start_node_nbr]["pos"]))
+
+            # The candidate pool is all other available leaves.
+            candidate_pool = available_leaves - {start_node, leaf_pairs.get(start_node)}
+            if not candidate_pool:
+                break
+
+            theta_deg_sums = {}
+            for cand_node in candidate_pool:
+                cand_pos = np.array(self.G.nodes[cand_node]["pos"])
+                if np.linalg.norm(start_pos - cand_pos) > self.width_px * 20.0:
+                    continue
+
+                tan1 = self._unit(cand_pos - start_pos)
+                cand_nbr = next(iter(self.G.neighbors(cand_node)), None)
+                if cand_nbr is None: continue
+
+                tan2 = self._unit(np.array(self.G.nodes[cand_nbr]["pos"]) - cand_pos)
+                
+                angle1 = np.rad2deg(np.arccos(np.clip(np.dot(tan0, tan1), -1.0, 1.0)))
+                angle2 = np.rad2deg(np.arccos(np.clip(np.dot(tan1, tan2), -1.0, 1.0)))
+                theta_deg_sums[cand_node] = angle1 + angle2
+            
+            # 5. Make the connection if a suitable candidate was found.
+            if not theta_deg_sums:
+                # No valid candidate found for this start_node. It's a dead-end.
+                # Remove it from consideration and try to start a new chain in the next iteration.
+                available_leaves.discard(start_node)
+                # Find a new starting point from the remaining available leaves
+                if available_leaves:
+                    # To avoid getting stuck, select a new most isolated leaf from the remainder
+                    temp_leaf_list = list(available_leaves)
+                    leaf_positions = np.array([self.G.nodes[n]["pos"] for n in temp_leaf_list])
+                    leaf_kdtree = cKDTree(leaf_positions)
+                    distances, _ = leaf_kdtree.query(leaf_positions, k=2)
+                    if distances.shape[1] < 2: break
+                    max_dist_idx = np.argmax(distances[:, 1])
+                    new_iso_leaf = temp_leaf_list[max_dist_idx]
+                    if new_iso_leaf in leaf_pairs:
+                        start_node = leaf_pairs[new_iso_leaf]
+                    else:
+                        break # Cannot find a new valid fragment pair
+                continue
+
+            best_cand = min(theta_deg_sums, key=theta_deg_sums.get)
+            self.G.add_edge(start_node, best_cand)
+            
+            # 6. Update the set of available leaves and set the next start_node.
+            available_leaves.discard(start_node)
+            available_leaves.discard(best_cand)
+
+            # The next start_node will be the other end of the fragment we just connected to.
+            if best_cand in leaf_pairs:
+                start_node = leaf_pairs[best_cand]
+            else:
+                # We connected to a fragment without a pair, so we must find a new starting point.
+                # The loop will handle this by re-evaluating on the next iteration.
+                start_node = None
+
+    def reconstruct_dlo_old(self):
         
         
         # 1. Extract leaf nodes pairs on the same fragment
@@ -486,7 +699,12 @@ class DLOGraph:
                             + np.rad2deg(np.arccos(np.dot(tan1, tan2)))
                 # print(f"Sum angle between {start_node} and {cand}: {theta_deg_sum:.2f}°")
 
-
+            if not theta_deg_sums:
+                logging.warning(
+                    "reconstruct_dlo: no valid candidates for leaf %d (radius=%.1fpx)",
+                    start_node, self.width_px * 20.0
+                )
+                break
             best_cand = min(theta_deg_sums, key=theta_deg_sums.get)
             self.G.add_edge(start_node, best_cand)
             start_node = leaf_pairs[best_cand]
@@ -1670,9 +1888,9 @@ class DLOGraph:
         points = np.array([pos[node] for node in pos.keys()])
         
         # Fit B-spline
-        bspline_fitting.fit_bspline(points,
-                                    # n_control_points=n_control_points, degree=degree, smoothing=smoothing
-                                    )
+        # bspline_fitting.fit_bspline(points,
+        #                             n_control_points=n_control_points, degree=degree, smoothing=smoothing
+        #                             )
         
         tck, fitted_points = bspline_fitting.fit_bspline(points,
                                                         #  n_control_points, degree, smoothing

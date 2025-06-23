@@ -11,7 +11,7 @@ import cv2
 from digit_interface.digit import Digit
 from digit_interface.digit_handler import DigitHandler
 
-logging.basicConfig(level=logging.DEBUG)
+# logging.basicConfig(level=logging.DEBUG)
 
 # Print a list of connected DIGIT's
 digits = DigitHandler.list_digits()
@@ -19,32 +19,35 @@ print("Connected DIGIT's to Host:")
 pprint.pprint(digits)
 
 # Connect to a Digit device with serial number with friendly name
-digit = Digit("D21123", "Left Gripper")
-digit.connect()
+digit_1 = Digit("D21123", "Left Gripper")
+digit_2 = Digit("D21124", "Right Gripper")
+
+digit_1.connect()
+digit_2.connect()
 
 # Print device info
-print(digit.info())
+# print(digit.info())
 
 # Change LED illumination intensity
-digit.set_intensity(Digit.LIGHTING_MIN)
-time.sleep(1)
-digit.set_intensity(Digit.LIGHTING_MAX)
+digit_1.set_intensity(Digit.LIGHTING_MIN)
+# time.sleep(1)
+digit_2.set_intensity(Digit.LIGHTING_MAX)
 
 # Change DIGIT resolution to QVGA
-qvga_res = Digit.STREAMS["VGA"]
-digit.set_resolution(qvga_res)
+vga_res = Digit.STREAMS["VGA"]
+digit_1.set_resolution(vga_res)
 
 # Change DIGIT FPS to 15fps
 fps_30 = Digit.STREAMS["VGA"]["fps"]["30fps"]
-digit.set_fps(fps_30)
+digit_1.set_fps(fps_30)
 
 # Grab single frame from DIGIT
-frame = digit.get_frame()
+frame = digit_1.get_frame()
 print(f"Frame WxH: {frame.shape[0]}{frame.shape[1]}")
 
 # Display stream obtained from DIGIT
-digit.show_view()
+digit_1.show_view()
 
 # Disconnect DIGIT stream
-digit.disconnect()
+digit_1.disconnect()
 

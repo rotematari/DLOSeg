@@ -25,9 +25,10 @@ _C.*
 src/clipseg/weights/
 
 
-src/dloseg/dataset/
+src/dloseg/dataset_*
 src/dloseg/__pycache__
 
 pyzed-4.2-cp310-cp310-linux_x86_64.whl
 
 src/zed/record/recordings
+dataset*/
