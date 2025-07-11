@@ -27,55 +27,55 @@ def load_yaml(yaml_path):
         logging.error(f"Error parsing YAML file: {e}")
         return {}
 
-def get_spline(mask):
+def get_spline(mask, config):
     """
     Fit a spline to the branches of the graph.
     
     Args:
-        graph (DLOGraph): The graph to fit the spline to.
-        smoothing (int): Smoothing factor for the spline fitting.
-        max_num_points (int, optional): Maximum number of points in the spline.
+        mask: The mask to fit the spline to.
+        config: Configuration dictionary containing parameters.
         
     Returns:
-        None
+        DLOGraph: The processed graph with fitted splines.
     """
-    graph = DLOGraph()
-    print(f"Time to setup graph: {time.time() - setup_time:.3f} seconds")
+    graph = DLOGraph(config=config)
+    
     load_time = time.time()
     graph.load_from_mask(
                     mask=mask,
-                        statistic="mean",
-                        min_cluster_factor=0.50,
-                        padding_size=40,
+                    config=config
                     )
     print(f"Time to load mask: {time.time() - load_time:.3f} seconds")
 
     # Visualize initial graph
-    graph.visualize(node_size=5, with_labels=False, title="Initial Tree Graph")
+    if config['show_initial_graph']:
+        graph.visualize(node_size=config['node_size_large'], with_labels=True, title="Initial Tree Graph")
     prune_time = time.time()
-    graph.prune_short_branches_and_delete_junctions(max_length=6)
+    graph.prune_short_branches_and_delete_junctions(max_length=config['max_prune_length'])
     print(f"Time to prune branches: {time.time() - prune_time:.3f} seconds")
     
-
-    
-    graph.visualize(node_size=1, with_labels=False, title="Pruned Graph")
+    if config['show_pruned_graph']:
+        graph.visualize(node_size=config['node_size_small'], with_labels=True, title="Pruned Graph")
     start_fit = time.time()
     # Fit spline to branches
-    graph.fit_spline_to_branches(smoothing=20, max_num_points=10)
+    graph.fit_spline_to_branches(smoothing=config['spline']['smoothing'], max_num_points=config['spline']['max_num_points'])
     print(f"Time to fit spline to branches: {time.time() - start_fit:.3f} seconds")
-    time_to_prune = time.time()
+
     
-    graph.visualize(node_size=1, with_labels=False, title="Graph After Spline Fitting")
+    if config['show_spline_graph']:
+        graph.visualize(node_size=config['node_size_small'], with_labels=True, title="Graph After Spline Fitting")
     
     start_dlo = time.time()
     graph.reconstruct_dlo()
     print(f"Time to reconstruct DLO: {time.time() - start_dlo:.3f} seconds")
-    graph.visualize(node_size=1, with_labels=False, title="Graph After DLO Reconstruction")
+    if config['show_dlo_graph']:
+        graph.visualize(node_size=config['node_size_small'], with_labels=False, title="Graph After DLO Reconstruction")
 
     print(f"Total processing time: {time.time() - start_total:.3f} seconds")
     print("Done")
     
     graph.fit_bspline_to_graph()
+    
     return graph
 
 
@@ -224,6 +224,27 @@ def get_zed_calibration(zed_calib_path, res='720p'):
         'baseline': baseline,
         'resolution': suffix
     }
+
+def get_images_from_stereo_pair(image_left_path, image_right_path):
+    # Load the mask
+    mask_l_path = config['mask_l_path']
+    mask_l = cv2.imread(mask_l_path, cv2.IMREAD_GRAYSCALE)
+    mask_r_path = config['mask_r_path']
+    mask_r = cv2.imread(mask_r_path, cv2.IMREAD_GRAYSCALE)
+    # img_real_path = config['img_real_path']
+    # img_real = cv2.imread(img_real_path, cv2.IMREAD_GRAYSCALE)
+    # # split to left right
+    # img_real_l, img_real_r = img_real[:, :img_real.shape[1] // 2], img_real[:, img_real.shape[1] // 2:]
+
+    # img_real_l = img_real_l * mask_l  # Normalize mask to 0-1 range
+    # img_real_l[img_real_l < img_real_l[img_real_l > 0].mean()] = 0 # Set pixels below mean to 0
+    
+    # img_real_r = img_real_r * mask_r  # Normalize mask to 0-1 range
+    # img_real_r[img_real_r < img_real_r[img_real_r > 0].mean()] = 0 # Set pixels below mean to 0
+    img_real_l = mask_l
+    img_real_r = mask_r
+    return img_real_l, img_real_r
+
 def visualize_rectification(raw_left, raw_right, rectified_left, rectified_right):
     """Displays the original and rectified images side-by-side with epipolar lines."""
     
@@ -240,61 +261,127 @@ def visualize_rectification(raw_left, raw_right, rectified_left, rectified_right
     ax2.imshow(cv2.cvtColor(rectified_combined, cv2.COLOR_BGR2RGB))
     ax2.set_title('After Rectification (Epipolar lines are horizontal)')
     ax2.axis('off')
-
+    
 if __name__ == '__main__':
 
-    zed_calib_path = '/home/admina/segmetation/DLOSeg/src/zed/calibration_data/zed_2i_cal_data.yaml'
-    zed_calibration = get_zed_calibration(zed_calib_path)
+    config = {
+        # File paths
+        'mask_l_path': '/home/admina/segmetation/DLOSeg/outputs/mbest_ds/S1/gt_images/img50.png',
+        'mask_r_path': '/home/admina/segmetation/DLOSeg/outputs/mbest_ds/S1/gt_images/img1.png',
+        'img_real_path': '/home/admina/segmetation/DLOSeg/src/graph/data_720_15fps/img_04.png',
+        'zed_calib_path': '/home/admina/segmetation/DLOSeg/src/zed/calibration_data/zed_2i_cal_data.yaml',
+        
+        # ZED calibration settings
+        'zed': {
+            'resolution': '720p'
+        },
+        
+        # Rectification settings
+        'rectification': {
+            'alpha': 0
+        },
+        
+        # Graph processing parameters
+        
+        'statistic': 'mean',
+        'min_cluster_factor': 1.0,
+        'padding_size': 0,
+        'max_prune_length': 10,
+        'dialate_iterations': 1,  # Number of iterations for dilation
+        'erode_iterations': 1,  # Number of iterations for erosion
+        'max_dist_to_connect_leafs': 400,  # Maximum distance to connect leaf nodes
+        'max_dist_to_connect_nodes': 5,  # Maximum distance to connect internal nodes
+
+        # Spline fitting parameters
+        'spline': {
+            'smoothing': 20,
+            'max_num_points': 50
+        },
+        
+        # Visualization settings
+        'on_mask': False,  # Whether to draw the mask as background
+        'show_initial_graph': False,
+        'show_pruned_graph': False,
+        'show_spline_graph': True,
+        'show_dlo_graph': False,
+        'show_rectification': False,
+        'show_final_plots': False,
+        'node_size_small': 1,
+        'node_size_large': 5,
+        'figure_size': (12, 10),
+        
+        
+        # Processing settings
+        'processing': {
+            'process_right_image': False  # Set to True to process right image as well
+        }
+    }
+
+    zed_calibration = get_zed_calibration(config['zed_calib_path'], config['zed']['resolution'])
     # Start timing
     start_total = time.time()
     read_time = time.time()
-    # Load the mask
-    mask_l_path = '/home/admina/segmetation/DLOSeg/outputs/seg_data_720_15fps/img_06_left_mask_0.png'
-    mask_l = cv2.imread(mask_l_path, cv2.IMREAD_GRAYSCALE)
-    mask_r_path = '/home/admina/segmetation/DLOSeg/outputs/seg_data_720_15fps/img_06_right_mask_0.png'
-    mask_r = cv2.imread(mask_r_path, cv2.IMREAD_GRAYSCALE)
-    img_real_path ='/home/admina/segmetation/DLOSeg/src/graph/data_720_15fps/img_06.png'
-    img_real = cv2.imread(img_real_path, cv2.IMREAD_GRAYSCALE)
-    # split to left right
-    img_real_l, img_real_r = img_real[:, :img_real.shape[1] // 2], img_real[:, img_real.shape[1] // 2:]
 
-    
-    print(f"Time to read images: {time.time() - read_time:.3f} seconds")
-    # Normalize mask to 0-1 range
-    setup_time = time.time()
-    img_real_l = img_real_l * mask_l  # Normalize mask to 0-1 range
-    img_real_l[img_real_l < img_real_l[img_real_l > 0].mean()] = 0
-    
-    img_real_r = img_real_r * mask_r  # Normalize mask to 0-1 range
-    img_real_r[img_real_r < img_real_r[img_real_r > 0].mean()] = 0
     # plt.imshow(img_real_r, cmap='gray')
     # plt.show()
     # Create graph instance and load mask
-
-    rect_left, rect_right = rectify_stereo_pair(img_real_l, img_real_r, zed_calibration, alpha=0)
-    
+    img_real_l, img_real_r = get_images_from_stereo_pair(config['mask_l_path'], config['mask_r_path'])
+    # rect_left, rect_right = rectify_stereo_pair(img_real_l, img_real_r, zed_calibration, alpha=0)
+    rect_left,rect_right = img_real_l, img_real_r
     # visualize_rectification(img_real_l, img_real_r, rect_left, rect_right)
+    plt.figure()
+    plt.imshow(rect_left, cmap='gray')
+    plt.title('Rectified Left Image')
+    plt.pause(0.1)
+    # plt.figure()
+    # plt.imshow(rect_right, cmap='gray')
+    # plt.title('Rectified Right Image')
+    # plt.pause(0.1)
+    # resize image to 256 
     
+    orig_h, orig_w = rect_left.shape
+    new_h, new_w = 256, 256
+    if orig_h > 256 or orig_w > 256:
+        print(f"Resizing images from {orig_h}x{orig_w} to 256x256")
+        rect_left = cv2.resize(rect_left, (new_h, new_w), interpolation=cv2.INTER_LINEAR)
+        rect_right = cv2.resize(rect_right, (new_h, new_w), interpolation=cv2.INTER_LINEAR)
+    else:
+        print(f"Images are already smaller than 256x256, no resizing needed")
+
+
     print("-----------left-------------\n")
-    G_left = get_spline(rect_left)
+    start_total = time.time()
+    G_left = get_spline(rect_left,config=config)
+    print(f"Time to process left image: {time.time() - start_total:.3f} seconds")
     print("-----------right-------------\n")
-    G_right = get_spline(rect_right)
+    # G_right = get_spline(rect_right,config=config)
 
 
+    # resize to original size
+    rect_left = cv2.resize(rect_left, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
+    # compute scale factors
+    scale_x = orig_w / new_w
+    scale_y = orig_h / new_h
     
+    bspline_pts_orig = G_left.full_bspline * np.array([scale_x, scale_y]) - np.array([G_left.padding_size*2, G_left.padding_size*2])
+    
+    bspline_pts_orig = np.round(bspline_pts_orig).astype(int)
+    # rect_right = cv2.resize(rect_right, (real_W,
     # plot full_bspline of left and right
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
-    
-    ax1.plot(G_left.full_bspline[:, 0], G_left.full_bspline[:, 1], 'r-', label='Left Full B-spline')
+    ax1.imshow(rect_left, cmap='gray')
+    ax1.plot(bspline_pts_orig[:, 0], bspline_pts_orig[:, 1], 'r-', label='Left Full B-spline')
     ax1.set_title('Left Full B-spline')
     ax1.axis('equal')
     ax1.legend()
-    ax2.plot(G_right.full_bspline[:, 0], G_right.full_bspline[:, 1], 'b-', label='Right Full B-spline')
-    ax2.set_title('Right Full B-spline')
-    ax2.axis('equal')
-    ax2.legend()
+    # ax1.invert_yaxis()
+    # ax2.plot(G_right.full_bspline[:, 0], G_right.full_bspline[:, 1], 'b-', label='Right Full B-spline')
+    # ax2.invert_yaxis()
+    # ax2.set_title('Right Full B-spline')
+    # ax2.axis('equal')
+    # ax2.legend()
     plt.show()
-    print(f"Left graph nodes: {len(G_left.nodes())}, edges: {len(G_left.edges())}")
+    # print(f"Left graph nodes: {len(G_left.nodes())}, edges: {len(G_left.edges())}")
 
 
     # spline matching

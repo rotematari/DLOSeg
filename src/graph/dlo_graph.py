@@ -2,24 +2,14 @@ import numpy as np
 import networkx as nx
 import cv2
 import time
+from typing import Optional, List, Dict, Any,Tuple
 import matplotlib.pyplot as plt
-from typing import Optional, Tuple, List, Dict, Literal, Set, Any, Union
-
-from scipy.spatial import cKDTree
-from skimage.draw import line
-import torch
-import torch.nn.functional as F
+from scipy.spatial import KDTree
 import logging
 from graph import bspline_fitting
-import math
-from scipy.interpolate import splprep, splev
-from dataclasses import dataclass
-@dataclass
-class _EndPoint:
-    node: int           # graph node id
-    pos:  np.ndarray    # (2,) or (3,)
-    frag: int           # connected component id
-    
+
+from sklearn.neighbors import kneighbors_graph
+from scipy.sparse.csgraph import minimum_spanning_tree
 
 class DLOGraph:
     """
@@ -27,7 +17,7 @@ class DLOGraph:
     Optimized for processing speed and memory efficiency.
     """
     
-    def __init__(self, logger: Optional[logging.Logger] = None):
+    def __init__(self, config: Dict[str, Any] = None) -> None:
         """
         Initialize a DLOGraph from a binary mask or create an empty graph.
 
@@ -36,6 +26,7 @@ class DLOGraph:
         mask : np.ndarray, optional
             Binary mask where True/1 represents the DLO
         """
+        self.config = config if config is not None else {}
         self.G = nx.Graph()
         self._full_coords_array = None
         self.width_px = None
@@ -44,14 +35,19 @@ class DLOGraph:
         self._coords_array = None
         self._nodes_array = None
         self._mask_bool = None
+        self.mask_origin = None
         self.full_bspline = None
+        
+        
+        self.padding_size = config.get('padding_size', 4)
+        self.dialate_iterations = config.get('dialate_iterations', 2)
+        self.erode_iterations = config.get('erode_iterations', 2)
+
+        self.max_dist_to_connect_leafs = config.get('max_dist_to_connect_leafs', 20.0)  # Default distance if not provided
+        self.max_dist_to_connect_nodes = config.get('max_dist_to_connect_nodes', 5.0)  # Default distance if not provided
 
 
-
-    def load_from_mask(self, mask: np.ndarray,
-                       statistic: Literal["median", "mean", "min", "max"] = "mean",
-                       min_cluster_factor: float = 2.0,
-                       padding_size: int = 20) -> None:
+    def load_from_mask(self, mask: np.ndarray, config: Dict[str, Any] = None) -> None:
         """
         Load graph from binary mask image.
         
@@ -62,19 +58,12 @@ class DLOGraph:
         downsample : int
             Downsampling factor for the mask
         """
-        # Timer for performance tracking
-        start_time = time.time()
-        h, w = mask.shape
-
-        # pad the mask
-        # Pad 10 pixels on all sides with black
-        padd_time = time.time()
-        mask = cv2.copyMakeBorder(mask, padding_size, padding_size, padding_size, padding_size,
+        pad_time = time.time()
+        self.mask_origin = mask.copy()
+        mask = cv2.copyMakeBorder(mask, self.padding_size, self.padding_size, self.padding_size, self.padding_size,
                                   cv2.BORDER_CONSTANT, value=0)
-        self.mask_bool = (mask>0).view(np.uint8)
-        # print(f"Mask padding completed in {time.time() - padd_time:.3f} seconds")
-        
-        
+        # self.mask_bool = (mask>0).view(np.uint8)
+        print(f"Padding completed in {time.time() - pad_time:.3f} seconds")
         # --- Dilation and Erosion ---
 
         # 1. Define a kernel
@@ -82,123 +71,86 @@ class DLOGraph:
         # A common choice is a rectangular or elliptical kernel.
         # cv2.getStructuringElement(shape, size)
         # Shape can be: cv2.MORPH_RECT, cv2.MORPH_CROSS, cv2.MORPH_ELLIPSE
+        erode_dialate_start = time.time()
         kernel_size = 3
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
 
         # 2. Apply Dilation
         # Dilation expands the white regions in the mask.
-        self.mask_bool = cv2.dilate(self.mask_bool, kernel, iterations=1)
+        
+        mask = cv2.dilate(mask, kernel, iterations=self.dialate_iterations)
 
         # 3. Apply Erosion
         # Erosion shrinks the white regions in the mask.
-        self.mask_bool = cv2.erode(self.mask_bool, kernel, iterations=2)
         
+        mask = cv2.erode(mask, kernel, iterations=self.erode_iterations)
+        print(f"Dilation and erosion completed in {time.time() - erode_dialate_start:.3f} seconds")
         # plt.figure(figsize=(10, 8))
         # plt.imshow(self.mask_bool, cmap='gray')
-        # Extract foreground pixels
-        # self.dlo_pixels = np.column_stack(np.nonzero(self.mask_bool))
-        # Make it [x, y] order to match coords
-        start_time = time.time()
-        
-        # ys, xs = np.nonzero(self.mask_bool)
-        # self._full_coords_array = np.column_stack((xs, ys))
-        
-        # print(f"Mask coordinates extraction completed in {time.time() - start_time:.3f} seconds")
-        # Pre-compute this once in the initialization
-        # Start timing for width estimation
+        # plt.title("Processed Mask")
+        # plt.show()
 
-        # Estimate DLO width
-        width_estimation_start = time.time()
-        self.width_px , self.mask_bool = self._estimate_dlo_width(statistic=statistic)
-        # self.width_px = h/150
+        skeletonization_start = time.time()
+        # self.width_px , self.mask_bool = self._estimate_dlo_width(statistic=config.get('statistic', 'mean'))
+        # print(f"DLO width estimation completed in {time.time() - width_estimation_start:.3f} seconds")
+        # skeletonize 
+
+        # skel, dist = medial_axis(self.mask_bool > 0, return_distance=True)
+        # should get 0-255
+        mask[mask > 0] = 255
+        skel = cv2.ximgproc.thinning(mask, thinningType=cv2.ximgproc.THINNING_GUOHALL)
+        # fig, ax = plt.subplots()
+        # # draw the original mask in gray
+        # ax.imshow(self.mask_origin, cmap='gray')
+        # # overlay the skeleton in blue with 60% opacity
+        # ax.imshow(skel, cmap='Blues', alpha=0.6)
+
+        # ax.set_title("Skeletonized Mask")
+        # ax.axis('off')     # hide axes if you like
+        # plt.tight_layout()
+        # plt.show()
+        self.mask_bool = (skel>0).astype(np.uint8)  # Convert to uint8 for visualization
+        
+        print(f"Skeletonization completed in {time.time() - skeletonization_start:.3f} seconds")
+        start_get_coords = time.time()
         ys, xs = np.nonzero(self.mask_bool)
         self._coords_array = np.column_stack((xs, ys))
-        # print(f"DLO width estimation completed in {time.time() - width_estimation_start:.3f} seconds")
-
-        
-        # Start timing for graph creation
-        graph_creation_start = time.time()
-        
+        print(f"Coordinates extraction completed in {time.time() - start_get_coords:.3f} seconds")
+        # plt.imshow(self.skeleton, cmap='gray')
+        # plt.title("Skeletonized Mask")
+        # plt.show()
         # Create initial graph
-        self.G = self._mask_to_simplified_graph_new(min_cluster_factor=min_cluster_factor)
-
-        # print(f"Graph creation completed in {time.time() - graph_creation_start:.3f} seconds")
+        graph_creation_start = time.time()
+        self.G = self._mask_to_simplified_graph()
+        print(f"Graph creation completed in {time.time() - graph_creation_start:.3f} seconds")
         
         # Start timing for spatial index refresh
         # spatial_index_start = time.time()
         self._refresh_spatial_index()
-        # print(f"Spatial index refresh completed in {time.time() - spatial_index_start:.3f} seconds")
 
-        # print(f"Mask loaded in {time.time() - start_time:.3f} seconds. Width: {self.width_px} px")
-    def _estimate_dlo_width(
-            self,
-            statistic: str = "max",
-    ) -> float:
 
-        dist_type  = cv2.DIST_L1
-        mask_size  = 3                     # 3×3 kernel is the fast path
+    def _refresh_spatial_index(self) -> None:
+        """Rebuild the KD-tree spatial index for the graph nodes."""
+        self._pos_dict = nx.get_node_attributes(self.G, "pos")
+        self._nodes_array = np.array(list(self._pos_dict.keys()), dtype=int)
+        self._coords_array = np.array([self._pos_dict[n] for n in self._nodes_array], dtype=int)
 
-        dist_small = cv2.distanceTransform(self.mask_bool, dist_type, mask_size)
 
-        if statistic == "median":
-            median = np.median(dist_small[dist_small > 0.0])
-            return float(median*2) , (dist_small > median).astype(np.uint8)
-        if statistic == "mean":
-            mean = np.mean(dist_small[dist_small > 0.0])
-            return float(mean*2) , (dist_small > mean).astype(np.uint8)
-        if statistic == "min":
-            min = np.min(dist_small[dist_small > 0.0])
-            return float(min*2) , (dist_small > min).astype(np.uint8)
-        if statistic == "max":
-            max = np.max(dist_small[dist_small > 0.0])
-            return float(max*2) , (dist_small > max).astype(np.uint8)
-        raise ValueError("statistic must be 'median', 'mean', 'min' or 'max'")
-    def _mask_to_simplified_graph_new(self, min_cluster_factor: float = 2.0) -> nx.Graph:
+    def _mask_to_simplified_graph(self) -> nx.Graph:
+        
         coords = self._coords_array          # (N,2) array of [x,y]
         H, W = self.mask_bool.shape
-        gs = max(self.width_px, 1.0)         # grid size
-        min_size = int(self.width_px * min_cluster_factor)
-
-        # 1) assign each point to a 2D grid cell
-        cells = np.floor(coords / gs).astype(int)
-        n_bins_x = math.ceil(W / gs)
-        cell_id = cells[:,1] * n_bins_x + cells[:,0]
-
-        # 2) find unique cells, inverse indices, and their counts
-        uniq_ids, inverse, counts = np.unique(cell_id,
-                                            return_inverse=True,
-                                            return_counts=True)
-
-        # 3) select only the “big enough” bins
-        large_cells = np.where(counts >= min_size)[0]
-        if large_cells.size == 0:
-            return nx.Graph()  # nothing to add
-
-        # 4) vectorized centroid computation per cell
-        sum_x = np.bincount(inverse, weights=coords[:,0])
-        sum_y = np.bincount(inverse, weights=coords[:,1])
-        centroids = np.vstack((sum_x[large_cells]/counts[large_cells],
-                            sum_y[large_cells]/counts[large_cells])).T
-
-        # 5) for each large cell, pick the one pixel closest to its centroid
-        rep_coords = []
-        for ci, centroid in zip(large_cells, centroids):
-            members = np.nonzero(inverse == ci)[0]
-            pts     = coords[members]
-            dists   = np.linalg.norm(pts - centroid, axis=1)
-            winner  = members[np.argmin(dists)]
-            rep_coords.append(coords[winner].astype(int))
-
-        rep_coords = np.asarray(rep_coords)  # shape (M,2)
-        M = rep_coords.shape[0]
-
-        # 7) build k-NN graph on reps and take its MST
-        #    (each rep is a node 0..M-1)
         
+
+        kd_start = time.time()
+        M = coords.shape[0]
         k = 3
-        tree = cKDTree(rep_coords)
-        dists, idxs = tree.query(rep_coords, k+1,distance_upper_bound=gs*5)  # idxs[:,0] is self
+        
+        tree = KDTree(coords)
+        dists, idxs = tree.query(coords, k+1,distance_upper_bound=self.max_dist_to_connect_nodes)  # idxs[:,0] is self
+        print(f"KDTree query completed in {time.time() - kd_start:.3f} seconds")
         # Filter out invalid neighbors (distances that are inf or indices that are >= M)
+        edges_start = time.time()
         valid_edges = []
         for i in range(M):
             for j in range(1, k+1):  # skip self (j=0)
@@ -208,25 +160,23 @@ class DLOGraph:
                 # Check if neighbor is valid (not inf distance and valid index)
                 if not np.isinf(neighbor_dist) and neighbor_idx < M:
                     valid_edges.append((i, neighbor_idx, neighbor_dist))
-        # rows   = np.repeat(np.arange(M), k)
-        # cols   = idxs[:, 1:].ravel()
-        # weights= dists[:,1:].ravel()
-
+        print(f"Edge filtering completed in {time.time() - edges_start:.3f} seconds")
+        # Create a graph from the valid edges
+        graph_time = time.time()
         G = nx.Graph()
         # add all reps as nodes (storing their 2D positions)
-        G.add_nodes_from((i, {"pos": tuple(rep_coords[i])}) for i in range(M))
+        G.add_nodes_from((i, {"pos": tuple(coords[i])}) for i in range(M))
         
         # add weighted edges from the valid k-NN connections
         G.add_weighted_edges_from(valid_edges)
-        # add all reps as nodes (storing their 2D positions)
-        # G.add_nodes_from((i, {"pos": tuple(rep_coords[i])}) for i in range(M))
-        # add weighted edges from the k-NN
-        # G.add_weighted_edges_from(zip(rows, cols, weights))
-
+        tree_start = time.time()
         # extract the minimum‐spanning‐tree
-        T = nx.minimum_spanning_tree(G)
-        T.graph["grid_size"] = gs
+        T = nx.minimum_spanning_tree(G,algorithm='prim') # 'kruskal', 'prim', or 'boruvka'
+        # T =G 
+        print(f"Tree extraction completed in {time.time() - tree_start:.3f} seconds")
+        print(f"Graph creation from edges completed in {time.time() - graph_time:.3f} seconds")
         return T
+
 
 
     def prune_short_branches_and_delete_junctions(self,max_length: int) -> None:
@@ -291,6 +241,27 @@ class DLOGraph:
             G.remove_nodes_from(nodes_to_prune)
             
         _prune_short_branches(self.G, max_length)
+        # connect leaf nodes if they close enough
+
+        leaf_nodes = [n for n in self.G.nodes if self.G.degree[n] == 1]
+        
+        leaf_positions = np.array([self.G.nodes[n]["pos"] for n in leaf_nodes])
+        all_poses = np.array([self.G.nodes[n]["pos"] for n in self.G.nodes])
+        leaf_tree = KDTree(leaf_positions)
+        # find pairs of leaf nodes that are close enough
+        dist, pairs_index = leaf_tree.query(leaf_positions, k=2, distance_upper_bound=self.max_dist_to_connect_leafs)
+        pairs = [(leaf_nodes[i], leaf_nodes[j]) for i, j in pairs_index if j < len(leaf_nodes) and i < len(leaf_nodes)]
+        
+        # connect leaf nodes that are close enough
+        for i, j in pairs:
+            if self.G.has_edge(i, j):
+                continue
+            norm = np.linalg.norm(all_poses[i] - all_poses[j])
+            if norm <= 3:
+                self.G.add_edge(i, j)
+        leaf_nodes = [n for n in self.G.nodes if self.G.degree[n] == 1]
+        self.leaf_nodes_poses = np.array([self.G.nodes[n]["pos"] for n in leaf_nodes])
+        # remove junction nodes (nodes with degree > 2)
         junction_nodes = [n for n in self.G.nodes if self.G.degree[n] > 2]
         self.G.remove_nodes_from(junction_nodes)
         _prune_short_branches(self.G, max_length)
@@ -298,7 +269,8 @@ class DLOGraph:
         zero_degree_nodes = [n for n in self.G.nodes if self.G.degree[n] == 0]
         self.G.remove_nodes_from(zero_degree_nodes)
 
-    def _extract_branches_0(self) -> List[List[int]]:
+
+    def _extract_branches(self) -> List[List[int]]:
         """
         Extract branches from the graph.
         A branch is defined as a path between nodes with degree == 1.
@@ -317,33 +289,6 @@ class DLOGraph:
             visited.update(branch)
 
         return branches
-
-    def _extract_branches(self) -> List[List[int]]:
-        # 1) gather all leaves (deg == 1)
-        leaves = [n for n, d in self.G.degree() if d == 1]
-
-        branches = []
-        visited = set()
-        for leaf in leaves:
-            if leaf in visited:
-                continue
-            # 2) find the “other” leaf in the same component
-            comp = nx.node_connected_component(self.G, leaf)
-            other_leaves = [ℓ for ℓ in comp if self.G.degree(ℓ) == 1 and ℓ != leaf]
-
-            if other_leaves:
-                target = other_leaves[0]
-                # 3) BFS‐based shortest_path is O(n+m) but on a chain it's just the unique path
-                path = nx.shortest_path(self.G, source=leaf, target=target)
-            else:
-                # isolated single‐node component
-                path = [leaf]
-
-            branches.append(path)
-            visited.update(path)
-
-        return branches
-    
     def _create_graph_from_branches(self, branches: List[np.ndarray]) -> nx.Graph:
         """
         Create a graph from a list of 2D branches, as fast as possible.
@@ -356,13 +301,23 @@ class DLOGraph:
         nodes = []
         edges = []
         offset = 0
-
+        leaf_nodes = set()
         for branch in branches:
             L = branch.shape[0]
             # 1) add L nodes, with positions in their attr dict
             for i in range(L):
                 node_id = offset + i
-                nodes.append((node_id, {'pos': tuple(branch[i])}))
+                pos = tuple(branch[i])
+                nodes.append((node_id, {'pos':pos }))
+                # check if it is a leaf node
+                
+                for leaf_pos in self.leaf_nodes_poses:
+                    dist = np.linalg.norm(np.array(pos) - np.array(leaf_pos))
+                    if dist < 3:
+                        # if the node is close enough to a leaf node, mark it as a leaf node
+                        leaf_nodes.add(node_id)
+                        break
+                
 
             # 2) add the L-1 edges along this branch
             #    using a list comprehension that yields tuples
@@ -377,10 +332,9 @@ class DLOGraph:
         G = nx.Graph()
         G.add_nodes_from(nodes)  # nodes is a List[(int, dict)]
         G.add_edges_from(edges)  # edges is a List[(int, int)]
-
+        self.ends_leaf_nodes = list(leaf_nodes)
 
         return G
-
     
     def fit_spline_to_branches(self,
                                smoothing: float = 2.0,
@@ -393,7 +347,7 @@ class DLOGraph:
         # branches = self._extract_branches()
         # print(f"Extracted {len(branches)} branches in {time.time() - ex_time:.3f} seconds")
         ex_time = time.time()
-        branches = self._extract_branches_0()
+        branches = self._extract_branches()
         print(f"Extracted_0 {len(branches)} branches in {time.time() - ex_time:.3f} seconds")
         
         branches_coords = []
@@ -409,20 +363,9 @@ class DLOGraph:
             if len(coords) < 5:
                 # Skip branches that are too short to fit a spline
                 continue
-            # smooth_2d_branch = bspline_fitting.smooth_2d_branch_splprep(coords=coords,
-            #     s=smoothing,
-            #     num_samples=max_num_points
-            # )
-            polyorder = 3
-            if len(coords)//2 > polyorder :
-                window_length = len(coords)//2
-            else:
-                window_length = polyorder + 1
-            smooth_2d_branch = bspline_fitting.smooth_2d_branch_savgol(
-                coords=coords,
-                window_length=window_length, 
-                polyorder=polyorder,
-
+            smooth_2d_branch = bspline_fitting.smooth_2d_branch_splprep(coords=coords,
+                s=smoothing,
+                num_samples=max_num_points
             )
             smoothed_branches.append(smooth_2d_branch)
         
@@ -432,32 +375,7 @@ class DLOGraph:
         # Generate new graph from the smoothed branches
         self.G = self._create_graph_from_branches(smoothed_branches)
         print(f"Generated graph from branches in {time.time() - start_generation:.3f} seconds")
-
-
-
-
-    def _unit(self,v: np.ndarray) -> np.ndarray:
-        n = np.linalg.norm(v)
-        return v / n if n > 0 else v
-
-    def _estimate_tangent(self, G: nx.Graph, node: int) -> np.ndarray:
-        """tangent = (node → its neighbour) or (prev → node) depending on degree"""
-        nbrs = list(G.neighbors(node))
-        if not nbrs:
-            return np.zeros(2)
-        j = nbrs[0]
-        return self._unit(np.array(G.nodes[node]["pos"]) -np.array(G.nodes[j]["pos"]))
-
-    def _cubic_bezier(self, p0, d0, p1, d1, n=50, λ=0.3):
-        gap = np.linalg.norm(p1 - p0)
-        b0, b1 = p0, p0 + λ * gap * d0
-        b2, b3 = p1 - λ * gap * d1, p1
-        t = np.linspace(0., 1., n)[:, None]
-        pts = ((1 - t) ** 3) * b0 + 3 * ((1 - t) ** 2) * t * b1 \
-            + 3 * (1 - t) * (t ** 2) * b2 + (t ** 3) * b3
-        return pts
-    
-
+        
     def _find_most_isolated_leaf_node_by_nearest_neighbor(self) -> int:
         """
         Find the leaf node that has the maximum distance to its nearest leaf neighbor.
@@ -474,25 +392,162 @@ class DLOGraph:
         
         # Get positions of all leaf nodes
         leaf_positions = np.array([self.G.nodes[n]["pos"] for n in leaf_nodes])
+        # build a tree on just the leaf positions
+        tree = KDTree(leaf_positions)
+
+        # query each leaf against itself + the nearest other point
+        # → dists.shape = (L,2), where dists[i,0]=0 (self), dists[i,1]=nearest‐other
+        dists, idxs = tree.query(leaf_positions, k=2)
+        # idxs = [(leaf_nodes[i], leaf_nodes[j]) for i,j in idxs]  # convert indices to node IDs
+        # the “isolation metric” for each leaf is the 2nd column
+        min_dists = list(dists[:,1])
+
+        most_isolated_ids = []
+        # pick the leaf with the maximum of those
+        most_iso_idx = np.argmax(min_dists)
+        most_isolated_ids.append(leaf_nodes[most_iso_idx])
+        min_dists[most_iso_idx] = 0  # mark this one as used
         
-        # For each leaf node, find the minimum distance to any other leaf node
-        max_min_distance = -1
-        most_isolated_node = None
+        most_iso_idx = np.argmax(min_dists)
+        most_isolated_ids.append(leaf_nodes[most_iso_idx])
         
-        for i, node in enumerate(leaf_nodes):
-            node_pos = leaf_positions[i]
-            other_positions = np.delete(leaf_positions, i, axis=0)
+        # # For each leaf node, find the minimum distance to any other leaf node
+        # max_min_distance = -1
+        # most_isolated_node = None
+        
+        # for i, node in enumerate(leaf_nodes):
+        #     node_pos = leaf_positions[i]
+        #     other_positions = np.delete(leaf_positions, i, axis=0)
             
-            # Find minimum distance to any other leaf node
-            distances = np.linalg.norm(other_positions - node_pos, axis=1)
-            min_distance = np.min(distances)
+        #     # Find minimum distance to any other leaf node
+        #     distances = np.linalg.norm(other_positions - node_pos, axis=1)
+        #     min_distance = np.min(distances)
             
-            if min_distance > max_min_distance:
-                max_min_distance = min_distance
-                most_isolated_node = node
+        #     if min_distance > max_min_distance:
+        #         max_min_distance = min_distance
+        #         most_isolated_node = node
         
-        return most_isolated_node
+        return most_isolated_ids
     
+    def _get_unit_vector(self,v: np.ndarray) -> np.ndarray:
+        """
+            Normalize a vector to unit length.
+        """
+        n = np.linalg.norm(v)
+        return v / n if n > 0 else v
+
+    def reconstruct_dlo_2(self):
+        
+        """
+        Find clusters of leaf nodes and find the best configuration for connecting them.
+        """
+        leaf_nodes = [n for n in self.G.nodes if self.G.degree[n] == 1]
+        leaf_poses = np.array([self.G.nodes[n]["pos"] for n in leaf_nodes])
+        
+        # clus
+        
+        
+    def reconstruct_dlo(self):
+        """
+        Reconnects disjointed graph fragments into a single continuous DLO.
+
+        This method intelligently adds edges between leaf nodes (endpoints) of different
+        fragments by finding pairs that are geometrically well-aligned, minimizing
+        the bending energy of the connection.
+        """
+        # 1. Gather all leaf nodes and their properties.
+        all_leaf_nodes = {n for n in self.G.nodes if self.G.degree[n] == 1}
+        if len(all_leaf_nodes) < 2:
+            print("Not enough leaf nodes to reconstruct.")
+            return
+
+        comp_id_map = {n: i for i, c in enumerate(nx.connected_components(self.G)) for n in c}
+        leaf_pairs = {}
+        for n1 in all_leaf_nodes:
+            for n2 in all_leaf_nodes:
+                if n1 != n2 and comp_id_map.get(n1) == comp_id_map.get(n2):
+                    leaf_pairs[n1] = n2
+                    break
+
+        # find the start and end nodes 
+        # by finding the most isolated leafnodes 
+        ends_leaf_nodes = self.ends_leaf_nodes
+        # update available_leaves
+        available_leaves = [n for n in all_leaf_nodes if n not in ends_leaf_nodes]
+        available_leaves = set(available_leaves)
+        if not ends_leaf_nodes or ends_leaf_nodes[0] not in leaf_pairs:
+            raise ValueError("could not find most isolated leaf nodes or their pairs in the graph.")
+            
+
+        # The reconstruction will start from the other end of the most isolated fragment.
+        start_node = leaf_pairs[ends_leaf_nodes[0]]
+        
+        
+        while len(available_leaves) > 0:
+
+            # Find start node neighbours 
+            start_pos = np.array(self.G.nodes[start_node]["pos"])
+            start_node_nbr = next(iter(self.G.neighbors(start_node)), None)
+
+            # Get the tangent vector from the start node to its neighbor.
+            tan0 = self._get_unit_vector(start_pos - np.array(self.G.nodes[start_node_nbr]["pos"]))
+
+            # The candidate pool is all other available leaves.
+            candidate_pool = available_leaves - {start_node, leaf_pairs.get(start_node)}
+            if not candidate_pool:
+                break
+
+            theta_deg_sums = {}
+            for cand_node in candidate_pool:
+                cand_pos = np.array(self.G.nodes[cand_node]["pos"])
+                dist_from_current = np.linalg.norm(start_pos - cand_pos)
+                # Check if the candidate is within the maximum distance to connect leafs.
+                if dist_from_current > self.max_dist_to_connect_leafs:
+                    continue
+                # tangent vector from the start node to the candidate.
+                tan1 = self._get_unit_vector(cand_pos - start_pos)
+                cand_nbr = next(iter(self.G.neighbors(cand_node)), None)
+                if cand_nbr is None: continue
+                # tangent vector from the candidate to its neighbor.
+                tan2 = self._get_unit_vector(np.array(self.G.nodes[cand_nbr]["pos"]) - cand_pos)
+                
+                angle1 = np.rad2deg(np.arccos(np.clip(np.dot(tan0, tan1), -1.0, 1.0)))
+                angle2 = np.rad2deg(np.arccos(np.clip(np.dot(tan1, tan2), -1.0, 1.0)))
+                theta_deg_sums[cand_node] = angle1 + angle2
+            
+            # 5. Make the connection if a suitable candidate was found.
+            if not theta_deg_sums:
+                # No valid candidate found for this start_node. It's a dead-end.
+                # Remove it from consideration and try to start a new chain in the next iteration.
+                print(f"No valid candidates found for current node {start_node}.")
+                start_node = ends_leaf_nodes[1]  # Reset to the most isolated leaf
+                continue
+
+            best_cand = min(theta_deg_sums, key=theta_deg_sums.get)
+            self.G.add_edge(start_node, best_cand)
+            
+            # 6. Update the set of available leaves and set the next start_node.
+            available_leaves.discard(start_node)
+            available_leaves.discard(best_cand)
+
+            # The next start_node will be the other end of the fragment we just connected to.
+            if best_cand in leaf_pairs:
+                start_node = leaf_pairs[best_cand]
+                if start_node in ends_leaf_nodes:
+                    # If we connected to the most isolated leaf, we can stop.
+                    print(f"Found the end leaf node: {start_node}.")
+                    break
+            else:
+                # We connected to a fragment without a pair, so we must find a new starting point.
+                # The loop will handle this by re-evaluating on the next iteration.
+                start_node = None
+        
+        # Final step
+        # get the longest path in the graph
+        self.dlo_path = list(nx.simple_paths.all_simple_paths(self.G, source=ends_leaf_nodes[0], target=ends_leaf_nodes[1]))[0]
+        if not self.dlo_path:
+            logging.warning("No path found between the most isolated leaf nodes.")
+            return
     def _find_path(self, start_node: int, end_node: int) -> List[int]:
         """
         Find a path between two nodes in the graph using Dijkstra's algorithm.
@@ -518,1246 +573,14 @@ class DLOGraph:
     def fit_bspline_to_graph(self):
         
         
-        
-        # get leaf nodes
-        leaf_nodes = [n for n in self.G.nodes if self.G.degree[n] == 1]
-        
-        if len(leaf_nodes) != 2:
-            logging.warning(f"Cannot fit B-spline: expected exactly 2 leaf nodes, found {len(leaf_nodes)}.")
-            return
-        path = self._find_path(leaf_nodes[0], leaf_nodes[1])
-        # print(f"Fitting B-spline to path with {len(path)} nodes.")
-        
-        path_coords = np.array([self.G.nodes[n]["pos"] for n in path])
-        
+        path_coords = np.array([self.G.nodes[n]["pos"] for n in self.dlo_path])
         
         spl, fitted_points = bspline_fitting.fit_bspline(path_coords,n_points=500,k=5)
-        # print(f"Fitted B-spline with {len(fitted_points)} points.")
-        
 
         
         self.full_bspline = fitted_points
         print(f"Fitted B-spline with {len(fitted_points)} points.")
-        
-    def reconstruct_dlo(self):
-        """
-        Reconnects disjointed graph fragments into a single continuous DLO.
 
-        This method intelligently adds edges between leaf nodes (endpoints) of different
-        fragments by finding pairs that are geometrically well-aligned, minimizing
-        the bending energy of the connection.
-        """
-        # 1. Gather all leaf nodes and their properties.
-        all_leaf_nodes = {n for n in self.G.nodes if self.G.degree[n] == 1}
-        if len(all_leaf_nodes) < 2:
-            print("Not enough leaf nodes to reconstruct.")
-            return
-
-        comp_id_map = {n: i for i, c in enumerate(nx.connected_components(self.G)) for n in c}
-        leaf_pairs = {}
-        for n1 in all_leaf_nodes:
-            for n2 in all_leaf_nodes:
-                if n1 != n2 and comp_id_map.get(n1) == comp_id_map.get(n2):
-                    leaf_pairs[n1] = n2
-                    break
-        
-        available_leaves = set(all_leaf_nodes)
-
-        # 2. Determine the initial starting node using the requested method.
-        # This finds the globally most isolated leaf node to start the process.
-        most_isolated_leaf = self._find_most_isolated_leaf_node_by_nearest_neighbor()
-
-        if most_isolated_leaf is None or most_isolated_leaf not in leaf_pairs:
-            print("Could not determine a valid starting fragment.")
-            return
-
-        # The reconstruction will start from the other end of the most isolated fragment.
-        start_node = leaf_pairs[most_isolated_leaf]
-        
-        # 3. Iteratively connect the best-aligned fragments.
-        while len(available_leaves) > 2:
-            # Check if the designated start_node is still available to be connected.
-            if start_node not in available_leaves:
-                # This happens if the graph is fully connected or we are left with
-                # disjoint fragments that cannot be connected. We can safely stop.
-                break
-
-            # 4. Find the best candidate to connect to.
-            start_pos = np.array(self.G.nodes[start_node]["pos"])
-            start_node_nbr = next(iter(self.G.neighbors(start_node)), None)
-            if start_node_nbr is None:
-                available_leaves.discard(start_node)
-                continue
-
-            tan0 = self._unit(start_pos - np.array(self.G.nodes[start_node_nbr]["pos"]))
-
-            # The candidate pool is all other available leaves.
-            candidate_pool = available_leaves - {start_node, leaf_pairs.get(start_node)}
-            if not candidate_pool:
-                break
-
-            theta_deg_sums = {}
-            for cand_node in candidate_pool:
-                cand_pos = np.array(self.G.nodes[cand_node]["pos"])
-                if np.linalg.norm(start_pos - cand_pos) > self.width_px * 20.0:
-                    continue
-
-                tan1 = self._unit(cand_pos - start_pos)
-                cand_nbr = next(iter(self.G.neighbors(cand_node)), None)
-                if cand_nbr is None: continue
-
-                tan2 = self._unit(np.array(self.G.nodes[cand_nbr]["pos"]) - cand_pos)
-                
-                angle1 = np.rad2deg(np.arccos(np.clip(np.dot(tan0, tan1), -1.0, 1.0)))
-                angle2 = np.rad2deg(np.arccos(np.clip(np.dot(tan1, tan2), -1.0, 1.0)))
-                theta_deg_sums[cand_node] = angle1 + angle2
-            
-            # 5. Make the connection if a suitable candidate was found.
-            if not theta_deg_sums:
-                # No valid candidate found for this start_node. It's a dead-end.
-                # Remove it from consideration and try to start a new chain in the next iteration.
-                available_leaves.discard(start_node)
-                # Find a new starting point from the remaining available leaves
-                if available_leaves:
-                    # To avoid getting stuck, select a new most isolated leaf from the remainder
-                    temp_leaf_list = list(available_leaves)
-                    leaf_positions = np.array([self.G.nodes[n]["pos"] for n in temp_leaf_list])
-                    leaf_kdtree = cKDTree(leaf_positions)
-                    distances, _ = leaf_kdtree.query(leaf_positions, k=2)
-                    if distances.shape[1] < 2: break
-                    max_dist_idx = np.argmax(distances[:, 1])
-                    new_iso_leaf = temp_leaf_list[max_dist_idx]
-                    if new_iso_leaf in leaf_pairs:
-                        start_node = leaf_pairs[new_iso_leaf]
-                    else:
-                        break # Cannot find a new valid fragment pair
-                continue
-
-            best_cand = min(theta_deg_sums, key=theta_deg_sums.get)
-            self.G.add_edge(start_node, best_cand)
-            
-            # 6. Update the set of available leaves and set the next start_node.
-            available_leaves.discard(start_node)
-            available_leaves.discard(best_cand)
-
-            # The next start_node will be the other end of the fragment we just connected to.
-            if best_cand in leaf_pairs:
-                start_node = leaf_pairs[best_cand]
-            else:
-                # We connected to a fragment without a pair, so we must find a new starting point.
-                # The loop will handle this by re-evaluating on the next iteration.
-                start_node = None
-
-    def reconstruct_dlo_old(self):
-        
-        
-        # 1. Extract leaf nodes pairs on the same fragment
-        comp_id: Dict[int, int] = {n: i for i, c in enumerate(nx.connected_components(self.G))
-                        for n in c}
-        
-        leaf_nodes = [n for n in self.G.nodes if self.G.degree[n] == 1]
-        leaf_poses = np.array([self.G.nodes[n]["pos"] for n in leaf_nodes])
-        leaf_comps = [comp_id[n] for n in leaf_nodes]
-        leaf_pairs = {n0: n1 for i, n0 in enumerate(leaf_nodes)
-                      for n1 in leaf_nodes
-                      if leaf_comps[i] == leaf_comps[leaf_nodes.index(n1)]
-                      and n0 != n1
-                      }
-                      
-        
-        # print(f"Found {len(leaf_pairs)} leaf node pairs in {len(set(leaf_comps))} fragments.")
-        most_isolated_leaf = self._find_most_isolated_leaf_node_by_nearest_neighbor()
-        # print(f"Most isolated leaf node: {most_isolated_leaf}")
-        # most_isolated_leaf_pos = np.array(self.G.nodes[most_isolated_leaf]["pos"])
-        # 2. start traversal 
-        # from the most isolated leaf node
-        # to the its pair leaf node
-        # to the end point from the neighbor
-        tree = cKDTree(leaf_poses)
-        start_node = leaf_pairs[most_isolated_leaf]
-        ln = leaf_nodes.copy()
-        while len(ln) >2 :
-            
-            start_node_nbr = list(self.G.neighbors(start_node))[0]
-            start_pos = np.array(self.G.nodes[start_node]["pos"])
-            start_node_nbr_pos = np.array(self.G.nodes[start_node_nbr]["pos"])
-
-            tan0 = self._unit(start_pos - start_node_nbr_pos)
-            k= 10
-            results = tree.query_ball_point(start_pos,r=self.width_px * 20.0,return_sorted=False)
-            candidate_matches = [leaf_nodes[i] for i in results if leaf_nodes[i] != start_node and leaf_nodes[i] in ln]
-            theta_deg_sums = {}
-            for cand in candidate_matches:
-                cand_pos = np.array(self.G.nodes[cand]["pos"])
-                tan1 = self._unit(cand_pos - start_pos)
-                # from the candidate match to its neighbor
-                cand_nbr = list(self.G.neighbors(cand))[0]
-                cand_nbr_pos = np.array(self.G.nodes[cand_nbr]["pos"])
-                tan2 = self._unit(cand_nbr_pos - cand_pos)
-
-                theta_deg_sums[cand] = np.rad2deg(np.arccos(np.dot(tan0, tan1)))\
-                            + np.rad2deg(np.arccos(np.dot(tan1, tan2)))
-                # print(f"Sum angle between {start_node} and {cand}: {theta_deg_sum:.2f}°")
-
-            if not theta_deg_sums:
-                logging.warning(
-                    "reconstruct_dlo: no valid candidates for leaf %d (radius=%.1fpx)",
-                    start_node, self.width_px * 20.0
-                )
-                break
-            best_cand = min(theta_deg_sums, key=theta_deg_sums.get)
-            self.G.add_edge(start_node, best_cand)
-            start_node = leaf_pairs[best_cand]
-            ln = [n for n in self.G.nodes if self.G.degree[n] == 1]
-        # print(f"Best candidate for {start_node} is {best_cand} with angle sum {theta_deg_sums[best_cand]:.2f}°")
-
-    def connect_leaf_nodes_by_bezier_curves(
-            self,
-            max_dist_factor: float = 2.0,
-            k: int = 6,
-            λ_ratio: float = 0.30,
-            n_bridge: int = 50,
-            do_resample: bool = False,
-            resample_N: int = 60,
-        ):
-        """
-        Auto–connect leaf nodes with C¹-continuous Bézier bridges.
-
-        Parameters
-        ----------
-        max_dist_factor : float
-            distance threshold = factor × self.width_px
-        k : int
-            Number of nearest endpoints examined for each endpoint
-        λ_ratio : float
-            Control-point length = λ_ratio × gap  (0.25-0.35 good range)
-        n_bridge : int
-            #points sampled along each Bézier bridge
-        do_resample : bool
-            If True, refits a global B-spline and re-samples it at resample_N points
-        resample_N : int
-            Number of points in the output polyline if do_resample is True
-        """
-        print("➤ Connecting leaf nodes with Bézier curves …")
-
-        # ------------------------------------------------------------------
-        # 1. gather endpoints (= all degree-1 nodes) and their tangents
-        # ------------------------------------------------------------------
-        
-        
-        
-        leaf_nodes = [n for n in self.G.nodes if self.G.degree[n] == 1]
-        endpoints: List[_EndPoint] = []
-        start_time = time.time()
-        comp_id: Dict[int, int] = {n: i for i, c in enumerate(nx.connected_components(self.G))
-                                for n in c}
-        print(f"  found {len(leaf_nodes)} leaf nodes in {time.time() - start_time:.3f} seconds")
-        # find start leaf node
-        # by finding the most distant node in all of leaf nodes
-
-        most_isolated_leaf = self._find_most_isolated_leaf_node_by_nearest_neighbor()
-        # for n in leaf_nodes:
-        #     pos = np.asarray(self.G.nodes[n]["pos"], dtype=float)
-        #     tan = self._estimate_tangent(self.G, n)
-        #     endpoints.append(_EndPoint(n, pos, tan, comp_id[n]))
-
-        # if len(endpoints) < 2:
-        #     print("  nothing to connect.")
-        #     return
-
-        # ------------------------------------------------------------------
-        # 2. KD-tree: candidate search
-        # ------------------------------------------------------------------
-        P = np.array([ep.pos for ep in endpoints])
-        tree = cKDTree(P)
-        R_max = self.width_px * max_dist_factor
-        pairs = {}                      # node_id -> (best_cost, best_match_id)
-        visited_pairs = set()  # to avoid duplicates
-          # node_id -> sum of angles in degrees
-        best_pairs = set()  # to store the best pairs of endpoints
-        best_theta_sums = {}  # to store the best angle sums for each pair
-        for i, ep in enumerate(endpoints):
-            dists, idxs = tree.query(ep.pos, k=min(k + 1, len(endpoints)))
-            theta_deg_sums = {}
-            for dist, j in zip(dists[1:], idxs[1:]):      # skip itself (0)
-                ej = endpoints[j]
-                if ep.frag == ej.frag or dist > R_max:
-                    continue
-                # if (ep.node, ej.node) in visited_pairs or (ej.node, ep.node) in visited_pairs:
-                #     continue    
-                # ------------------------------------------------------
-                # 3. simple cost: distance + bending energy of 3 tangents
-                #    to the node then to the match then from the match to the neighbor 
-                # ------------------------------------------------------
-                # to the end point from the neighbor
-                tan0 = ep.tan 
-                # to the candidate match from the end point
-                tan1 = self._unit(ej.pos - ep.pos)  # unit vector
-                # from the candidate match to its neighbor
-                cand_nbr = list(self.G.neighbors(ej.node))[0]
-                tan2 = self._unit(np.array(self.G.nodes[cand_nbr]["pos"]) - ej.pos)
-
-
-                theta_deg_sums[tuple(sorted((ep.node, ej.node)))] = np.rad2deg(np.arccos(np.dot(tan0, tan1)))\
-                                + np.rad2deg(np.arccos(np.dot(tan1, tan2)))
-                visited_pairs.add((ep.node, ej.node))
-                # sum_theta_deg = np.rad2deg(np.arccos(np.dot(tan0, tan1)))\
-                #                 + np.rad2deg(np.arccos(np.dot(tan1, tan2)))
-                # print(f"Sum angle between {ep.node} and {ej.node}: {sum_theta_deg:.2f}°")
-            if theta_deg_sums:
-                best_pair = min(theta_deg_sums, key=theta_deg_sums.get)
-                if theta_deg_sums[best_pair] < 50.0:  # threshold for angle sum
-                    best_pairs.add(best_pair)
-                    best_theta_sums[best_pair] = theta_deg_sums[best_pair]
-        print(f"best_pairs: {best_pairs}")
-        # print(f"best_theta_sums: {best_theta_sums}")
-
-        # ------------------------------------------------------------------
-        # 5. build & insert bridges
-        # ------------------------------------------------------------------
-        next_id = max(self.G.nodes) + 1 if self.G.nodes else 0
-        for n0, n1 in best_pairs:
-            ep0 = next(ep for ep in endpoints if ep.node == n0)
-            ep1 = next(ep for ep in endpoints if ep.node == n1)
-            pts = self._cubic_bezier(ep0.pos, ep0.tan, ep1.pos, ep1.tan,
-                                n=n_bridge, λ=λ_ratio)
-
-            # add intermediate nodes (ignore first/last – they already exist)
-            new_nodes = list(range(next_id, next_id + len(pts) - 2))
-            next_id += len(new_nodes)
-            for pid, p in zip(new_nodes, pts[1:-1]):
-                self.G.add_node(pid, pos=p)
-            # connect polyline: n0 — new_nodes — n1
-            chain = [n0] + new_nodes + [n1]
-            self.G.add_edges_from(zip(chain[:-1], chain[1:]))
-
-        # # ------------------------------------------------------------------
-        # # 6. optional global spline refit and uniform re-sampling
-        # # ------------------------------------------------------------------
-        # if do_resample:
-        #     print("  refitting global B-spline …")
-        #     xyz = np.array([self.G.nodes[n]["pos"] for n in self.G.nodes]).T
-        #     tck, _ = splprep(xyz, s=0, k=3)
-        #     u_eq = np.linspace(0, 1, resample_N)
-        #     pts_eq = np.asarray(splev(u_eq, tck)).T
-
-        #     # rebuild the graph from scratch with uniform spacing
-        #     self.G.clear()
-        #     self.G.add_nodes_from(
-        #         (i, {"pos": p}) for i, p in enumerate(pts_eq)
-        #     )
-        #     self.G.add_edges_from((i, i + 1) for i in range(len(pts_eq) - 1))
-
-        # print("  ✓ Bézier bridging completed.")
-
-
-
-
-    def _bending_energy(self,prev_edges,next_edges, alpha=1.0):
-        """
-        Compute the bending energy between two edges.
-        as in discrete elastic rod model
-
-        :param
-        e_prev: previous edge vector
-        :param e_next: next edge vector
-        :param alpha: weight of the bending energy
-        :return: bending energy
-        """
-        # make sure the edges are 2D vectors
-        if prev_edges.ndim == 1:
-            prev_edges = prev_edges.reshape(1, -1)
-        if next_edges.ndim == 1:
-            next_edges = next_edges.reshape(1, -1)
-        # points: (N,2/3) tensor (requires_grad=True if torch)
-        e_prev = torch.from_numpy(prev_edges).float()  # (N,2/3)
-        e_next = torch.from_numpy(next_edges).float()  # (N,2/3)
-        if e_prev.size(1) == 2:
-            # N×2 → N×3   (append a zero z–component)
-            e_prev3 = F.pad(e_prev, (0, 1))        # (1,3)
-            e_next3 = F.pad(e_next, (0, 1))        # (1,3)
-
-        cross   = torch.cross(e_prev3, e_next3, dim=1)   # (1,3)
-        dot     = (e_prev3 * e_next3).sum(dim=1)         # (1,)
-
-        L_prev  = torch.linalg.norm(e_prev3, dim=1)
-        L_next  = torch.linalg.norm(e_next3, dim=1)
-
-        denom   = (L_prev * L_next + dot).clamp_min(1e-12)
-        kappa_b = 2.0 * cross / denom.unsqueeze(1)       # (1,3)
-
-        kappa2  = (kappa_b**2).sum(dim=1)                # (1,)
-        l_i     = 0.5 * (L_prev + L_next)                # (1,)
-        # E_i     = kappa2 * l_i                           # (1,) 
-        E_i =  kappa2                   
-        return E_i
-    
-    def _are_same_line(self, v1: np.ndarray, v2: np.ndarray, tol: float = 1e-9) -> bool:
-        """
-        Return True if v and w are colinear and point in the same direction.
-        v, w are length-2 numpy arrays (or lists / tuples).
-        """
-        v = np.asarray(v1, dtype=float)
-        w = np.asarray(v2, dtype=float)
-
-        if np.linalg.norm(v) < tol or np.linalg.norm(w) < tol:
-            raise ValueError("Zero-length vector")
-
-        # scalar z-component of the 2-D cross product
-        cross_z = v[0]*w[1] - v[1]*w[0]
-
-        colinear     = abs(cross_z) < tol          # nearly zero ⇒ parallel
-        same_signed  = np.dot(v, w) > 0            # >0 ⇒ same direction
-
-        return colinear and not same_signed
-    def _calculate_bending_energy(self, prev_node: int, curr_node: int, 
-                                next_node: int) -> float:
-        """Calculate the bending energy between three nodes."""
-        prev = np.asarray(self._pos_dict[prev_node])
-        curr = np.asarray(self._pos_dict[curr_node])
-        next = np.asarray(self._pos_dict[next_node])
-        # Check if any points are the same
-        prev_edges, next_edges = curr - prev, next - curr
-        
-        
-        if np.all(prev_edges == 0) or np.all(next_edges == 0):
-            return np.inf
-        return self._bending_energy(prev_edges, next_edges) , self._are_same_line(prev_edges, next_edges)
-    
-    def add_bending_energy_and_prune(self, be_limit: float = 1.5) -> None:
-        """
-        Add bending energy to the graph and prune edges with high bending energy.
-        
-        Parameters:
-        -----------
-        be_limit : float
-            Maximum bending energy allowed
-        """
-        print("Adding bending energy...")
-        to_remove = []
-        for node in self.G.nodes:
-            if self.G.degree[node] > 1:
-                neighbors = list(self.G.neighbors(node))
-                for i in range(len(neighbors)-1):
-                    prev_node = neighbors[i]
-                    curr_node = node
-                    next_node = neighbors[i+1]
-                    be_val, same_line = self._calculate_bending_energy(prev_node, curr_node, next_node)
-                    if be_val > be_limit or same_line:
-                        to_remove.append(curr_node)
-                        if not self.G.has_edge(next_node, prev_node):
-                            self.G.add_edge(next_node, prev_node, weight=be_val)
-                        continue
-                    self.G.nodes[curr_node].setdefault("bending_energy", []).append(
-                            ((prev_node, next_node), be_val)
-                        )
-        # add 0 degree nodes to the list
-        
-        
-        self.G.remove_nodes_from(to_remove)
-        zero_degree_nodes = [n for n in self.G.nodes if self.G.degree[n] == 0]
-        self.G.remove_nodes_from(zero_degree_nodes)
-
-
-    def _calc_sparse_distance_matrix(self,sparse_radius_factor) -> None:
-
-        # Get sparse distance matrix for faster neighbor lookup
-        self.sparse_radius = self.width_px * sparse_radius_factor
-        print(f"Calculating sparse distance matrix with radius {self.sparse_radius}")
-        S = self._kdtree.sparse_distance_matrix(self._kdtree, self.sparse_radius, output_type="coo_matrix")
-        # Calculate degree heuristic
-        if S.nnz:
-            # 1) “S” is a scipy.sparse.coo_matrix where each non‐zero entry
-            #    corresponds to a pair of nodes (i,j) that lie within your search radius.
-            # 2) `S.nnz` is the total number of non‐zero entries—i.e. the total number
-            #    of “edges” (including both directions) in your radius graph.
-            
-            # S.row and S.col are two arrays, each of shape (nnz,):
-            #   - S.row[k] = i
-            #   - S.col[k] = j
-            # means “node i has node j as a neighbor.”
-            #
-            # Because the sparse_distance_matrix is symmetric, you’ll see both (i,j)
-            # and (j,i) in those lists.
-            idx_all = np.hstack((S.row, S.col))
-            # Now idx_all is a single long array of length 2*nnz:
-            #    [ i0, i1, i2, …, j0, j1, j2, … ]
-            #
-            # Each index appears once for each neighbor‐relationship it belongs to.
-            neighbor_count = np.bincount(idx_all, minlength=len(self._nodes_array))
-            # neighbor_count[p] = number of neighbors point p has 
-            # (counting both directions, but that’s fine since deg(i)=deg(j)).
-        else:
-            neighbor_count = np.zeros(len(self._nodes_array), dtype=int)
-            
-        return neighbor_count
-    
-
-
-
-
-
-    
-    def _refresh_spatial_index(self) -> None:
-        """Rebuild the KD-tree spatial index for the graph nodes."""
-        self._pos_dict = nx.get_node_attributes(self.G, "pos")
-        self._nodes_array = np.array(list(self._pos_dict.keys()), dtype=int)
-        self._coords_array = np.array([self._pos_dict[n] for n in self._nodes_array], dtype=int)
-        self._kdtree = cKDTree(self._coords_array)
-    
-    def _clean_close_neighbors(self, nodes: np.ndarray, min_dist: float) -> np.ndarray:
-        """
-        Remove nodes that lie within `min_dist` of any previously selected node.
-
-        Args:
-            nodes:        Array of node‐indices (e.g. your `isolated_nodes`).
-            min_dist:     Minimum Euclidean distance required between kept nodes.
-
-        Returns:
-            A filtered array of node‐indices with no two closer than min_dist.
-        """
-        cleaned = []
-        # get actual coordinates for those nodes
-        coords = self._coords_array[nodes]  # shape (N, 3) or (N,2) depending on dim
-
-        for idx, pt in zip(nodes, coords):
-            # check distance to all already-kept points
-            if all(np.linalg.norm(pt - self._coords_array[other]) > min_dist
-                for other in cleaned):
-                cleaned.append(idx)
-
-        return np.array(cleaned, dtype=nodes.dtype)
-
-    def _get_isolated_nodes(self, radius_factor) -> np.ndarray:
-
-        
-        print("Finding isolated nodes...")
-        neighbor_count = self._calc_sparse_distance_matrix(sparse_radius_factor=radius_factor)
-        # Get best starting nodes
-        isolated_nodes = self._nodes_array[np.argsort(neighbor_count)[:min(50, len(neighbor_count))]]
-        # if the nodes are close to each other, take only one
-        isolated_nodes = self._clean_close_neighbors(isolated_nodes, min_dist=self.sparse_radius)
-
-        return isolated_nodes
-
-
-    def remove_crowded_nodes(self,sparse_radius_factor) -> None:
-        """
-        Remove crowded nodes from the graph.
-        
-        Parameters:
-        -----------
-        crowded_idxs : np.ndarray
-            Indices of crowded nodes to be removed
-        """
-        print("Removing crowded nodes...")
-        neighbor_count = self._calc_sparse_distance_matrix(sparse_radius_factor=sparse_radius_factor)
-        crowded_idxs = np.argsort(neighbor_count)[-100:]
-        self._nodes_array = np.delete(self._nodes_array, crowded_idxs)
-        self._coords_array = np.delete(self._coords_array, crowded_idxs, axis=0)
-        self.G.remove_nodes_from(crowded_idxs)
-        self.G = nx.convert_node_labels_to_integers(
-                    self.G, first_label=0, ordering='sorted'
-                )
-    
-    
-    def connect_all_nodes(self, radius_factor: float = 2.0) -> None:
-        """
-        Connect all nodes in the graph.
-        
-        Parameters:
-        -----------
-        radius_factor : float
-            Multiplier for search radius based on grid size
-        """
-        if not hasattr(self, 'width_px') or self.width_px is None:
-            raise ValueError("Width not calculated. Load a mask first.")
-            
-        radius = self.width_px * radius_factor
-        print(f"Connecting all nodes with radius {radius}")
-        self._refresh_spatial_index()
-
-
-        # Track visited nodes and paths
-        visited = set()
-        paths = []
-        
-        # Main connection loop
-        for node in self.G.nodes:
-            node_degree = self.G.degree[node]
-            if node_degree > 2:
-                continue
-            qpos = self._coords_array[node]
-            dist, idx = self._kdtree.query(qpos, k=5, distance_upper_bound=radius)
-            try:
-                # Get the indices of the nearest neighbors
-                valid = idx < len(self._nodes_array)
-                good_idxs = idx[valid]
-                candidate_nodes = self._nodes_array[good_idxs]
-                # remove the node itself from the candidates
-                candidate_nodes = candidate_nodes[candidate_nodes != node]
-                # remove the nodes that are already connected
-
-                for c in candidate_nodes:
-                    if self.G.has_edge(node, c):
-                        candidate_nodes = candidate_nodes[candidate_nodes != c]
-
-                for c in candidate_nodes:
-                    if self.G.degree[c] > 2:
-                        candidate_nodes = candidate_nodes[candidate_nodes != c]
-                if len(candidate_nodes) == 0:
-                    continue
-                
-                dist = np.linalg.norm(self._coords_array[candidate_nodes[0]] - self._coords_array[node])
-                self.G.add_edge(node, candidate_nodes[0], weight=float(dist))
-                if node_degree == 0 and len(candidate_nodes) > 1:
-                    dist = np.linalg.norm(self._coords_array[candidate_nodes[1]] - self._coords_array[node])
-                    self.G.add_edge(node, candidate_nodes[1], weight=float(dist))
-                    
-            except ValueError:
-                # Handle the case where no neighbors are found
-                print(f"No neighbors found for node {node}")
-                continue
-
-            
-        print("Connecting nodes...")
-    
-    def connect_close_leaf_nodes(self, radius_factor: float = 2.0) -> None:
-        
-        # get the leaf nodes
-        leaf_nodes = [n for n in self.G.nodes if self.G.degree[n] == 1]
-        
-        if not leaf_nodes:
-            print("No leaf nodes found.")
-            return
-        
-        if not hasattr(self, 'width_px') or self.width_px is None:
-            raise ValueError("Width not calculated. Load a mask first.")
-        radius = self.width_px * radius_factor
-        
-        print(f"Connecting close leaf nodes with radius {radius}")
-        
-        self._refresh_spatial_index()
-        
-        # leaf_node_tree = cKDTree(self._coords_array[leaf_nodes])
-        
-        while len(leaf_nodes) > 0:
-            node = leaf_nodes.pop(0)
-            qpos = self._coords_array[node]
-            dist, idx = self._kdtree.query(qpos, k=10, distance_upper_bound=radius)
-
-            # Get the indices of the nearest neighbors
-            valid = idx < len(self._nodes_array)
-            good_idxs = idx[valid]
-            candidate_nodes = self._nodes_array[good_idxs]
-            # remove the node itself from the candidates
-            candidate_nodes = candidate_nodes[candidate_nodes != node]
-            candidate_nodes = candidate_nodes[np.isin(candidate_nodes, leaf_nodes)]
-            # add edge to the graph
-            if len(candidate_nodes) > 0:
-                candidate_node = candidate_nodes[0]
-                if not self.G.has_edge(node, candidate_node):
-                    dist = np.linalg.norm(self._coords_array[candidate_node] - self._coords_array[node])
-                    self.G.add_edge(node, candidate_node, weight=float(dist))
-                    leaf_nodes.pop(leaf_nodes.index(candidate_node))
-        print("Connecting close leaf nodes...")
-
-    def find_all_paths(self)-> List[List[int]]:
-        """
-        Find all paths in the graph.
-
-        Returns:
-        --------
-        List[List[int]]
-            List of paths, where each path is a list of node indices
-        """
-        paths = []
-        for node in self.G.nodes:
-            for neighbor in self.G.neighbors(node):
-                if node < neighbor:
-                    path = nx.shortest_path(self.G, source=node, target=neighbor)
-                    paths.append(path)
-        return paths
-    def longest_path_with_bending_energy(self, k: int = 10, be_limit: float = 1.5,
-                                  radius_factor: float = 1.5,
-                                  show_log: bool = False,
-                                  iso_radius_factor: float = 10.0) -> None:
-        """
-        Connect nodes while minimizing bending energy.
-        
-        Parameters:
-        -----------
-        k : int
-            Number of nearest neighbors to consider
-        be_limit : float
-            Maximum bending energy allowed
-        radius_factor : float
-            Multiplier for search radius based on grid size
-        """
-        start_time = time.time()
-        
-        if not hasattr(self, 'width_px') or self.width_px is None:
-            raise ValueError("Width not calculated. Load a mask first.")
-            
-        radius = self.width_px * radius_factor
-        self._refresh_spatial_index()
-        if show_log:
-            print(f"Radius: {radius}")
-
-
-
-        best_n_ids = self._get_isolated_nodes(radius_factor=iso_radius_factor).tolist()
-
-        sub_G = self.G.subgraph(best_n_ids)
-
-
-        pos = nx.get_node_attributes(sub_G, 'pos')
-        nx.draw(sub_G, pos=pos, node_size=5, node_color='red',
-               edge_color='red', with_labels=False)
-        # 3. Draw grid underneath
-        plt.gca().set_axisbelow(True)
-        plt.grid(True, which='major', linestyle='--', linewidth=0.5, alpha=0.7, zorder=0)
-        # plt.show()
-        # Track visited nodes and paths
-        visited = set()
-        paths = []
-        new_path = True
-        prev_node = None
-        current_node = None
-        path = []
-        paths = []
-        graph_size = len(self.G.nodes)
-        # Main connection loop
-        while len(best_n_ids) > 0:
-
-
-            if new_path:
-                if show_log and len(path) > 1:
-                    print(f"PATH: {path}")
-                    print(f"PATH LENGTH: {len(path)}")
-                    
-
-                path = []
-                if show_log:
-                    print(f"---------------------------NEW PATH---------------------------")
-                    
-                prev_node = best_n_ids.pop(0)
-
-                
-                path.append(prev_node)
-                # visited.add(prev_node)
-                
-                # Find nearest unvisited node
-                qpos = self._coords_array[prev_node]
-                dist, idx = self._kdtree.query(qpos, k=2)  # self + 1
-                candidate_nodes = self._nodes_array[idx]
-                candidates = [(candidate_node, dist[i]) for i, candidate_node in enumerate(candidate_nodes)
-                                if candidate_node != prev_node
-                                    and dist[i] < radius*2]
-
-                if not candidates :
-                    if show_log:
-                        print(f"No candidates found for node for NEW PATH {prev_node}")
-                    continue
-
-                current_node, current_node_dist = candidates[0]
-                self.G.add_edge(prev_node, current_node, weight=float(current_node_dist))
-                path.append(current_node)
-
-                new_path = False
-                if show_log:
-                    print(f"from {prev_node} to {current_node}")
-                
-            else:
-                # Extend current path
-                qpos = self._coords_array[current_node]
-                dist, idx = self._kdtree.query(qpos, k=k+1)
-                candidate_nodes = self._nodes_array[idx]
-                candidates = [(candidate_node, dist[i]) for i, candidate_node in enumerate(candidate_nodes)
-                              if candidate_node != current_node
-                              and dist[i] < radius*2]
-                # in best_n_ids
-                is_in_best_n_ids = [True for c in candidates if c[0] in best_n_ids]
-                if not candidates or any(is_in_best_n_ids) :
-                    paths.append(path)
-                    new_path = True
-                    if show_log:
-                        print(f"No candidates found for node ENDS PATH {current_node}")
-                    continue
-                    
-                # Select candidates with acceptable bending energy
-                be_vals = {}
-                for i, candidate in enumerate(candidates):
-                    candidate, dist = candidate
-
-                    be_val, same_line = self._calculate_bending_energy(
-                        prev_node, current_node, candidate)
-                    if be_val <= be_limit and not same_line:
-                        # combine dist and be_val
-                        be_vals[candidate] = be_val
-
-                
-                if not be_vals:
-                    paths.append(path)
-                    new_path = True
-                    if show_log:
-                        print(f"No VALID candidates found for node ENDS PATH {current_node}")
-                    continue
-                best = min(be_vals, key=be_vals.get)
-                best_list = sorted(be_vals, key=be_vals.get)
-                while len(best_list) > 0:
-                    best = best_list.pop(0)
-
-                    # if the new edge is not passing through the graph dont add it
-                    current_node_pose = self._coords_array[current_node]
-                    best_candidate_pose = self._coords_array[best]
-                    rows,cols = line(current_node_pose[0], current_node_pose[1],best_candidate_pose[0], best_candidate_pose[1])
-
-                    # checks if the line is in the graph
-                    if self.mask_bool[cols, rows].all():
-                        if not self.G.has_edge(current_node, best):
-                            dist = np.linalg.norm(best_candidate_pose - current_node_pose)
-                            self.G.add_edge(current_node, best, weight=float(dist))
-                            self.G.nodes[current_node].setdefault("bending_energy", []).append(
-                                ((prev_node, best), be_vals[best])
-                            )
-
-                        path.append(best)
-                        visited.add(best)
-                        prev_node, current_node = current_node, best
-                        break
-                    else:
-                        # print("Line between {} and {} is not in the graph.".format(current_node, best))
-                        continue
-                if len(best_list) == 0:
-                    paths.append(path)
-                    new_path = True
-                    if show_log:
-                        print(f"No VALID candidates found for node ENDS PATH {current_node}")
-        
-
-        
-        print(f"Connected with bending energy in {time.time() - start_time:.3f} seconds")
-        return paths
-    def connect_with_bending_energy(self, k: int = 10, be_limit: float = 1.5,
-                                  radius_factor: float = 1.5,
-                                  show_log: bool = False) -> None:
-        """
-        Connect nodes while minimizing bending energy.
-        
-        Parameters:
-        -----------
-        k : int
-            Number of nearest neighbors to consider
-        be_limit : float
-            Maximum bending energy allowed
-        radius_factor : float
-            Multiplier for search radius based on grid size
-        """
-        start_time = time.time()
-        
-        if not hasattr(self, 'width_px') or self.width_px is None:
-            raise ValueError("Width not calculated. Load a mask first.")
-            
-        radius = self.width_px * radius_factor
-        self._refresh_spatial_index()
-        if show_log:
-            print(f"Radius: {radius}")
-
-        best_n_ids = self._get_isolated_nodes(radius_factor=radius_factor).tolist()
-        # Track visited nodes and paths
-        visited = set()
-        paths = []
-        new_path = True
-        prev_node = None
-        current_node = None
-        path = []
-        paths = []
-
-        # Main connection loop
-        while True:
-
-            zero_deg = [n for n in self.G.nodes
-                        if self.G.degree[n] == 0
-                        and n not in visited]
-            
-            if len(zero_deg) <= 1:
-                break
-                
-            if new_path:
-                if show_log and len(path) > 1:
-                    print(f"PATH: {path}")
-                    print(f"PATH LENGTH: {len(path)}")
-                    
-                if len(path) == 2:
-                    self.G.remove_node(path[1])
-                    if show_log:
-                        print(f"Removed node {path[1]} from path")
-                
-                path = []
-                if show_log:
-                    print(f"---------------------------NEW PATH---------------------------")
-                # Pick a starting node
-                if len(best_n_ids) == 0:
-                    prev_node = zero_deg[0]
-                else:
-                    while best_n_ids:
-                        prev_node = best_n_ids.pop(0)
-                        if prev_node in zero_deg:
-                            break
-                    else:
-                        prev_node = zero_deg[0]
-                
-                path.append(prev_node)
-                visited.add(prev_node)
-                
-                # Find nearest unvisited node
-                qpos = self._coords_array[prev_node]
-                dist, idx = self._kdtree.query(qpos, k=2)  # self + 1
-                candidate_nodes = self._nodes_array[idx]
-                candidates = [(candidate_node, dist[i]) for i, candidate_node in enumerate(candidate_nodes)
-                              if candidate_node not in visited
-                              and dist[i] < radius*2]
-
-                if not candidates:
-                    if show_log:
-                        print(f"No candidates found for node for NEW PATH {prev_node}")
-                    continue
-
-                current_node, current_node_dist = candidates[0]
-                self.G.add_edge(prev_node, current_node, weight=float(current_node_dist))
-                path.append(current_node)
-                visited.add(current_node)
-                new_path = False
-                if show_log:
-                    
-                    print(f"from {prev_node} to {current_node}")
-                
-            else:
-                # Extend current path
-                qpos = self._coords_array[current_node]
-                dist, idx = self._kdtree.query(qpos, k=k+1)
-                candidate_nodes = self._nodes_array[idx]
-                candidates = [(candidate_node, dist[i]) for i, candidate_node in enumerate(candidate_nodes)
-                              if candidate_node not in visited
-                              and dist[i] < radius*2]
-
-                if not candidates:
-                    paths.append(path)
-                    new_path = True
-                    if show_log:
-                        print(f"No candidates found for node ENDS PATH {current_node}")
-                    continue
-                    
-                # Select candidates with acceptable bending energy
-                be_vals = {}
-                for i, candidate in enumerate(candidates):
-                    candidate, dist = candidate
-
-                    be_val, same_line = self._calculate_bending_energy(
-                        prev_node, current_node, candidate)
-                    if be_val <= be_limit and not same_line:
-                        # combine dist and be_val
-                        be_vals[candidate] = be_val
-
-                
-                if not be_vals:
-                    paths.append(path)
-                    new_path = True
-                    if show_log:
-                        print(f"No VALID candidates found for node ENDS PATH {current_node}")
-                    continue
-                
-
-
-                best = min(be_vals, key=be_vals.get)
-                best_list = sorted(be_vals, key=be_vals.get)
-                while len(best_list) > 0:
-                    best = best_list.pop(0)
-
-                    # if the new edge is not passing through the graph dont add it
-                    current_node_pose = self._coords_array[current_node]
-                    best_candidate_pose = self._coords_array[best]
-                    rows,cols = line(current_node_pose[0], current_node_pose[1],best_candidate_pose[0], best_candidate_pose[1])
-
-                    # checks if the line is in the graph
-                    if self.mask_bool[cols, rows].all():
-                        if not self.G.has_edge(current_node, best):
-                            dist = np.linalg.norm(best_candidate_pose - current_node_pose)
-                            self.G.add_edge(current_node, best, weight=float(dist))
-                            self.G.nodes[current_node].setdefault("bending_energy", []).append(
-                                ((prev_node, best), be_vals[best])
-                            )
-
-                        path.append(best)
-                        visited.add(best)
-                        prev_node, current_node = current_node, best
-                        break
-                    else:
-                        # print("Line between {} and {} is not in the graph.".format(current_node, best))
-                        continue
-                if len(best_list) == 0:
-                    paths.append(path)
-                    new_path = True
-                    if show_log:
-                        print(f"No VALID candidates found for node ENDS PATH {current_node}")
-        
-        # Remove isolated nodes
-        # self.G.remove_nodes_from([n for n in self.G.nodes if self.G.degree[n] == 0])
-        
-        print(f"Connected with bending energy in {time.time() - start_time:.3f} seconds")
-
-
-    
-    def connect_nodes_by_topology(self, be_limit: float = 5.0, max_dist_factor: float = 2.0, show_log: bool = True) -> None:
-        """
-        Connect nodes in the graph by topology in two phases:
-        1. First connects isolated nodes (degree 0) to leaf nodes (degree 1)
-        2. Then connects leaf nodes (degree 1) to other leaf nodes based on bending energy
-        
-        Parameters:
-        -----------
-        be_limit : float
-            Maximum allowed bending energy for leaf-to-leaf connections
-        max_dist_factor : float
-            Maximum distance factor for connecting nodes (multiplied by width_px)
-        """
-        start_time = time.time()
-        
-        # Prepare spatial data
-        self._refresh_spatial_index()
-        
-        # Track connection counts
-        isolated_connected = 0
-        leaf_connected = 0
-        
-        # ---- PHASE 1: Connect isolated nodes to leaf nodes ----
-        max_dist = self.width_px * max_dist_factor
-                # Main connection loop
-        if show_log:
-            print(f"----------------------------PHASE 2------------------------------\n")
-        leaf_connected = self.connect_leaf_nodes_by_bending_energy(be_limit, max_dist_factor, show_log)
-        if show_log:
-            print(f"Max distance for connection: {max_dist}")
-            print(f"----------------------------PHASE 1------------------------------\n")
-        isolated_connected = self.connect_zero_deg_nodes(be_limit, show_log, max_dist)
-
-
-        # if show_log:
-        #     print(f"Phase 1: Connected {isolated_connected} isolated nodes in {time.time() - start_time:.3f} seconds")
-        if show_log:
-            print(f"----------------------------PHASE 2------------------------------\n")
-        leaf_connected = self.connect_leaf_nodes_by_bending_energy(be_limit*3, max_dist_factor, show_log)
-        # ---- PHASE 2: Connect leaf nodes to other leaf nodes ----
-        phase2_time = time.time()
-
-        total_time = time.time() - start_time
-        # if show_log:
-            # print(f"Phase 2: Connected {leaf_connected} leaf node pairs in {time.time() - phase2_time:.3f} seconds")
-            # print(f"Total: Connected {isolated_connected + leaf_connected} node pairs in {total_time:.3f} seconds")
-        
-        return self 
-
-    def connect_zero_deg_nodes(self, be_limit, show_log, max_dist):
-        while True:
-            # Get current isolated and leaf nodes
-            isolated_nodes = [n for n in self.G.nodes if self.G.degree[n] == 0]
-            leaf_nodes = [n for n in self.G.nodes if self.G.degree[n] == 1]
-            
-            # Stop if no more isolated nodes or leaf nodes
-            if not isolated_nodes or not leaf_nodes:
-                break
-            
-            # Process each isolated node
-            connections_made = False
-            
-            for isolated_node in isolated_nodes:
-                best_leaf = None
-                best_dist = float('inf')
-                
-                # Find closest leaf node
-                isolated_pos = np.array(self._pos_dict[isolated_node])
-                leaf_nodes_to_connect = []
-                for i, leaf_node in enumerate(leaf_nodes):
-                    def check_to_connect(from_node, to_node, be_limit):
-                        from_node_pos = np.array(self._pos_dict[from_node])
-                        to_node_pos = np.array(self._pos_dict[to_node])
-                        dist = np.linalg.norm(from_node_pos - to_node_pos)
-                        
-                        if dist > max_dist:
-                            return False
-                        
-                        rows, cols = line(
-                        int(isolated_pos[0]), int(isolated_pos[1]),
-                        int(to_node_pos[0]), int(to_node_pos[1])
-                        )
-                        # line_poses = set(zip(rows, cols))
-                        
-                        # if line_poses.issubset(self._full_coords_set):
-                        if not self.mask_bool[cols, rows].all():
-                            return False
-                        
-                        # check if the resolting connection make a good bending energy
-                        leaf_nb = list(self.G.neighbors(to_node))[0]
-                        be, same_line = self._calculate_bending_energy(leaf_nb, to_node, from_node)
-                        if same_line or be > be_limit:
-                            return False
-                        
-                        return True
-                    leaf_nodes_to_connect.append(check_to_connect(isolated_node, leaf_node, be_limit))
-
-                # Connect to best leaf node if found
-                # if best_leaf is not None:
-                leaf_nodes_to_connect = [leaf_nodes[i] for i, leaf_node in enumerate(leaf_nodes_to_connect) if leaf_node]
-                if len(leaf_nodes_to_connect) == 2:
-                    if show_log:
-                        print(f"Connected isolated node {isolated_node} to leaf nodes {leaf_nodes_to_connect}")
-                    self.G.add_edge(isolated_node, leaf_nodes_to_connect[0], weight=float(best_dist))
-                    self.G.add_edge(isolated_node, leaf_nodes_to_connect[1], weight=float(best_dist))
-                    # isolated_connected += 1
-                    connections_made = True
-                    break
-                
-                if len(leaf_nodes_to_connect) == 1:
-                    best_leaf = leaf_nodes_to_connect[0]
-                    self.G.add_edge(isolated_node, best_leaf, weight=float(best_dist))
-                    if show_log:
-                        print(f"Connected isolated node {isolated_node} to leaf node {best_leaf}")
-                    self.G.add_edge(isolated_node, best_leaf, weight=float(best_dist))
-
-                    # # calculate bending energy
-                    # be, same_line = self._calculate_bending_energy(
-                    #     list(self.G.neighbors(best_leaf))[0],
-                    #     best_leaf,
-                    #     isolated_node
-                    # )
-                    # if be <= be_limit and not same_line:
-                    #     # Store bending energy information
-                    #     self.G.nodes[isolated_node].setdefault('bending_energy', []).append(
-                    #         ((list(self.G.neighbors(best_leaf))[0], best_leaf), be))
-                    #     self.G.nodes[best_leaf].setdefault('bending_energy', []).append(
-                    #         ((isolated_node, list(self.G.neighbors(best_leaf))[0]), be))
-                    #     if show_log:
-                    #         print(f"Added bending energy: {self.G.nodes[isolated_node]['bending_energy']}")
-                    #         print(f"Added bending energy: {self.G.nodes[best_leaf]['bending_energy']}")
-                    # self.G.nodes[best_leaf]['bending_energy'] = be
-
-                    # isolated_connected += 1
-                    connections_made = True
-                    # Only make one connection per iteration to ensure proper updating
-                    break
-                    
-            # If no connections were made, exit phase 1
-            if not connections_made:
-                break
-        return 
-
-    def connect_leaf_nodes_by_bending_energy(self, be_limit, max_dist_factor, show_log):
-        processed = set()  # Track processed leaf nodes
-        while True:
-            # Get current leaf nodes (recalculated each iteration)
-            leaf_nodes = [n for n in self.G.nodes if self.G.degree[n] == 1 and n not in processed]
-            
-            # Stop if no more unprocessed leaf nodes
-            if not leaf_nodes:
-                break
-                
-            # Take the first unprocessed leaf node
-            node_1 = leaf_nodes[0]
-            processed.add(node_1)
-            
-            node_1_pos = np.array(self._pos_dict[node_1])
-            
-            # Find candidates with acceptable bending energy
-            candidates = []
-            
-            # Check other leaf nodes
-            for node_2 in leaf_nodes:
-                if node_2 == node_1 or self.G.has_edge(node_1, node_2):
-                    continue
-                    
-                node_2_pos = np.array(self._pos_dict[node_2])
-                dist = np.linalg.norm(node_2_pos - node_1_pos)
-                
-                # Skip if too far
-                if dist > self.width_px * max_dist_factor:
-                    continue
-                    
-                # Calculate bending energy
-                nb_1 = list(self.G.neighbors(node_1))[0]
-                be, same_line = self._calculate_bending_energy(nb_1, node_1, node_2)
-                
-                # Skip if nodes would create a straight line
-                if same_line:
-                    continue
-            
-                # Store candidate with its bending energy
-                candidates.append((node_2, be, dist))
-            if not candidates:
-                continue
-            # Sort candidates by bending energy
-            candidates.sort(key=lambda x: x[1])
-            
-            # Try to connect to best candidate
-            if candidates[0][1] <= be_limit:
-                best_candidate, best_be, dist = candidates[0]
-                
-                # Get the current neighbors of best candidate
-                bc_nb_1 = list(self.G.neighbors(best_candidate))[0]
-                
-                # Check bending energy for the best_candidate node 
-                best_candidate_be, best_candidate_same_line = self._calculate_bending_energy(bc_nb_1, best_candidate, node_1)
-                
-                # Verify the connection is valid from both ends
-                if not best_candidate_same_line and best_candidate_be <= be_limit:
-                    # Check if path through mask is valid
-                    rows, cols = line(
-                        int(node_1_pos[0]), int(node_1_pos[1]),
-                        int(self._pos_dict[best_candidate][0]), int(self._pos_dict[best_candidate][1])
-                    )
-
-                    if self.mask_bool[cols, rows].all():
-                        # Add edge with attributes
-                        self.G.add_edge(node_1, best_candidate, weight=float(dist))
-                        if show_log:
-                            print(f"Connected leaf node {node_1} to leaf node {best_candidate}")
-                        # Store bending energy information
-                        self.G.nodes[node_1].setdefault('bending_energy', []).append(
-                            ((nb_1, best_candidate), best_be))
-                        self.G.nodes[best_candidate].setdefault('bending_energy', []).append(
-                            ((bc_nb_1, node_1), best_candidate_be))
-                        # print the bending energy added
-                        if show_log:
-                            print(f"Added bending energy: {self.G.nodes[node_1]['bending_energy']}")
-                            print(f"Added bending energy: {self.G.nodes[best_candidate]['bending_energy']}")
-
-                        
-                        # leaf_connected += 1
-                        
-                        # Processed nodes are no longer leaf nodes, so remove from processed
-                        processed.discard(node_1)
-                        processed.discard(best_candidate)
-                    else:
-                        if show_log:
-                            print(f"Line between {node_1} and {best_candidate} is not in the graph.")
-        return  
-
-    def _vector_angle(self, v1: np.ndarray, v2: np.ndarray) -> float:
-        """Calculate the angle between two vectors."""
-        v1_norm = np.linalg.norm(v1)
-        v2_norm = np.linalg.norm(v2)
-        
-        if v1_norm < 1e-9 or v2_norm < 1e-9:
-            return np.inf
-            
-        dot = np.dot(v1, v2)
-        cosang = np.clip(dot / (v1_norm * v2_norm), -1, 1)
-        return np.arccos(cosang)
-
-
-
-
-    
     def visualize(self, figsize: Tuple[int, int] = (10, 10), 
                 node_size: int = 5, with_labels: bool = False,title: str="") -> None:
         """
@@ -1776,9 +599,13 @@ class DLOGraph:
         ax.set_title(title)
 
         pos = nx.get_node_attributes(self.G, 'pos')
+        if self.config['on_mask']:
+            # 1. Draw the mask as background
+            ax.imshow(self.mask_origin, cmap='gray')
+        else:
+            ax.invert_yaxis()  # Flip Y axis to match image coordinates
         nx.draw(self.G, pos=pos, node_size=node_size, node_color='green',
-                edge_color='red', with_labels=with_labels, ax=ax)
-        ax.invert_yaxis()  # Flip Y axis to match image coordinates
+                    edge_color='red', with_labels=with_labels, ax=ax)
         ax.set_axis_on()
         # 3. Draw grid underneath
         ax.set_axisbelow(True)
@@ -1809,110 +636,1271 @@ class DLOGraph:
         # ax.invert_yaxis()  # Flip Y axis to match image coordinates
         plt.pause(0.01)
         return 
+
+
+    # def _estimate_tangent(self, G: nx.Graph, node: int) -> np.ndarray:
+    #     """tangent = (node → its neighbour) or (prev → node) depending on degree"""
+    #     nbrs = list(G.neighbors(node))
+    #     if not nbrs:
+    #         return np.zeros(2)
+    #     j = nbrs[0]
+    #     return self._unit(np.array(G.nodes[node]["pos"]) -np.array(G.nodes[j]["pos"]))
+
+    # def _cubic_bezier(self, p0, d0, p1, d1, n=50, λ=0.3):
+    #     gap = np.linalg.norm(p1 - p0)
+    #     b0, b1 = p0, p0 + λ * gap * d0
+    #     b2, b3 = p1 - λ * gap * d1, p1
+    #     t = np.linspace(0., 1., n)[:, None]
+    #     pts = ((1 - t) ** 3) * b0 + 3 * ((1 - t) ** 2) * t * b1 \
+    #         + 3 * (1 - t) * (t ** 2) * b2 + (t ** 3) * b3
+    #     return pts
     
-    def get_nodes_as_array(self) -> np.ndarray:
-        """
-        Get node positions as a numpy array.
-        
-        Returns:
-        --------
-        np.ndarray
-            Array of node positions, shape (N, 2)
-        """
-        pos = nx.get_node_attributes(self.G, 'pos')
-        return np.array(list(pos.values()), dtype=np.int32)
+
+
     
-    def fit_spline(self, path: List[int], smoothing: float = 0) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Fit a spline to a path through the graph.
+
         
-        Parameters:
-        -----------
-        path : List[int]
-            Ordered list of node IDs
-        smoothing : float
-            Smoothing factor for the spline
+
+
+    # def reconstruct_dlo_old(self):
+        
+        
+    #     # 1. Extract leaf nodes pairs on the same fragment
+    #     comp_id: Dict[int, int] = {n: i for i, c in enumerate(nx.connected_components(self.G))
+    #                     for n in c}
+        
+    #     leaf_nodes = [n for n in self.G.nodes if self.G.degree[n] == 1]
+    #     leaf_poses = np.array([self.G.nodes[n]["pos"] for n in leaf_nodes])
+    #     leaf_comps = [comp_id[n] for n in leaf_nodes]
+    #     leaf_pairs = {n0: n1 for i, n0 in enumerate(leaf_nodes)
+    #                   for n1 in leaf_nodes
+    #                   if leaf_comps[i] == leaf_comps[leaf_nodes.index(n1)]
+    #                   and n0 != n1
+    #                   }
+                      
+        
+    #     # print(f"Found {len(leaf_pairs)} leaf node pairs in {len(set(leaf_comps))} fragments.")
+    #     most_isolated_leaf = self._find_most_isolated_leaf_node_by_nearest_neighbor()
+    #     # print(f"Most isolated leaf node: {most_isolated_leaf}")
+    #     # most_isolated_leaf_pos = np.array(self.G.nodes[most_isolated_leaf]["pos"])
+    #     # 2. start traversal 
+    #     # from the most isolated leaf node
+    #     # to the its pair leaf node
+    #     # to the end point from the neighbor
+    #     tree = KDTree(leaf_poses)
+    #     start_node = leaf_pairs[most_isolated_leaf]
+    #     ln = leaf_nodes.copy()
+    #     while len(ln) >2 :
             
-        Returns:
-        --------
-        Tuple[np.ndarray, np.ndarray]
-            x and y coordinates of the spline points
-        """
-        pos = nx.get_node_attributes(self.G, 'pos')
-        points = np.array([pos[node] for node in path])
-        
-        # Fit spline
-        tck, u = splprep([points[:, 0], points[:, 1]], s=smoothing)
-        
-        # Evaluate spline at more points for smooth curve
-        u_new = np.linspace(0, 1, 100)
-        x_new, y_new = splev(u_new, tck)
-        
-        return x_new, y_new
-    def visualize_path(self, path: List[int], figsize: Tuple[int, int] = (10, 10),
-                node_size: int = 5, with_labels: bool = False) -> None:
-        """
-        Visualize a specific path through the graph.
-        """
-        fig, ax = plt.subplots(figsize=figsize)
-        ax.set_title("Path Visualization")
-        subG = self.G.subgraph(path)
-        pos = nx.get_node_attributes(subG, 'pos')
-        nx.draw(subG, pos=pos, node_size=node_size, edge_color='red', with_labels=with_labels, ax=ax)
-        # Highlight the path
-        path_edges = [(path[i], path[i + 1]) for i in range(len(path) - 1)]
-        nx.draw_networkx_edges(subG, pos=pos, edgelist=path_edges, edge_color='blue', width=2, ax=ax)
-        ax.invert_yaxis()  # Flip Y axis to match image coordinates
-        plt.pause(0.01)
-        return fig, ax
+    #         start_node_nbr = list(self.G.neighbors(start_node))[0]
+    #         start_pos = np.array(self.G.nodes[start_node]["pos"])
+    #         start_node_nbr_pos = np.array(self.G.nodes[start_node_nbr]["pos"])
 
-    def fit_bspline(self, n_control_points: int = 10, degree: int = 4, smoothing: float = None) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Fit a B-spline to a path through the graph.
+    #         tan0 = self._unit(start_pos - start_node_nbr_pos)
+    #         k= 10
+    #         results = tree.query_ball_point(start_pos,r=self.width_px * 20.0,return_sorted=False)
+    #         candidate_matches = [leaf_nodes[i] for i in results if leaf_nodes[i] != start_node and leaf_nodes[i] in ln]
+    #         theta_deg_sums = {}
+    #         for cand in candidate_matches:
+    #             cand_pos = np.array(self.G.nodes[cand]["pos"])
+    #             tan1 = self._unit(cand_pos - start_pos)
+    #             # from the candidate match to its neighbor
+    #             cand_nbr = list(self.G.neighbors(cand))[0]
+    #             cand_nbr_pos = np.array(self.G.nodes[cand_nbr]["pos"])
+    #             tan2 = self._unit(cand_nbr_pos - cand_pos)
+
+    #             theta_deg_sums[cand] = np.rad2deg(np.arccos(np.dot(tan0, tan1)))\
+    #                         + np.rad2deg(np.arccos(np.dot(tan1, tan2)))
+    #             # print(f"Sum angle between {start_node} and {cand}: {theta_deg_sum:.2f}°")
+
+    #         if not theta_deg_sums:
+    #             logging.warning(
+    #                 "reconstruct_dlo: no valid candidates for leaf %d (radius=%.1fpx)",
+    #                 start_node, self.width_px * 20.0
+    #             )
+    #             break
+    #         best_cand = min(theta_deg_sums, key=theta_deg_sums.get)
+    #         self.G.add_edge(start_node, best_cand)
+    #         start_node = leaf_pairs[best_cand]
+    #         ln = [n for n in self.G.nodes if self.G.degree[n] == 1]
+    #     # print(f"Best candidate for {start_node} is {best_cand} with angle sum {theta_deg_sums[best_cand]:.2f}°")
+
+    # def connect_leaf_nodes_by_bezier_curves(
+    #         self,
+    #         max_dist_factor: float = 2.0,
+    #         k: int = 6,
+    #         λ_ratio: float = 0.30,
+    #         n_bridge: int = 50,
+    #         do_resample: bool = False,
+    #         resample_N: int = 60,
+    #     ):
+    #     """
+    #     Auto–connect leaf nodes with C¹-continuous Bézier bridges.
+
+    #     Parameters
+    #     ----------
+    #     max_dist_factor : float
+    #         distance threshold = factor × self.width_px
+    #     k : int
+    #         Number of nearest endpoints examined for each endpoint
+    #     λ_ratio : float
+    #         Control-point length = λ_ratio × gap  (0.25-0.35 good range)
+    #     n_bridge : int
+    #         #points sampled along each Bézier bridge
+    #     do_resample : bool
+    #         If True, refits a global B-spline and re-samples it at resample_N points
+    #     resample_N : int
+    #         Number of points in the output polyline if do_resample is True
+    #     """
+    #     print("➤ Connecting leaf nodes with Bézier curves …")
+
+    #     # ------------------------------------------------------------------
+    #     # 1. gather endpoints (= all degree-1 nodes) and their tangents
+    #     # ------------------------------------------------------------------
         
-        Parameters:
-        -----------
-        n_control_points : int
-            Number of control points for the B-spline
-        degree : int
-            Degree of the B-spline (typically 3 for cubic splines)
-        smoothing : float or None
-            Smoothing factor. None for interpolation, larger values for smoother fit
-            
-        Returns:
-        --------
-        Tuple[np.ndarray, np.ndarray]
-            x and y coordinates of the fitted B-spline points
-        """
-        pos = nx.get_node_attributes(self.G, 'pos')
-        points = np.array([pos[node] for node in pos.keys()])
         
-        # Fit B-spline
-        # bspline_fitting.fit_bspline(points,
-        #                             n_control_points=n_control_points, degree=degree, smoothing=smoothing
-        #                             )
         
-        tck, fitted_points = bspline_fitting.fit_bspline(points,
-                                                        #  n_control_points, degree, smoothing
-                                                         )
+    #     leaf_nodes = [n for n in self.G.nodes if self.G.degree[n] == 1]
+    #     endpoints: List[_EndPoint] = []
+    #     start_time = time.time()
+    #     comp_id: Dict[int, int] = {n: i for i, c in enumerate(nx.connected_components(self.G))
+    #                             for n in c}
+    #     print(f"  found {len(leaf_nodes)} leaf nodes in {time.time() - start_time:.3f} seconds")
+    #     # find start leaf node
+    #     # by finding the most distant node in all of leaf nodes
+
+    #     most_isolated_leaf = self._find_most_isolated_leaf_node_by_nearest_neighbor()
+    #     # for n in leaf_nodes:
+    #     #     pos = np.asarray(self.G.nodes[n]["pos"], dtype=float)
+    #     #     tan = self._estimate_tangent(self.G, n)
+    #     #     endpoints.append(_EndPoint(n, pos, tan, comp_id[n]))
+
+    #     # if len(endpoints) < 2:
+    #     #     print("  nothing to connect.")
+    #     #     return
+
+    #     # ------------------------------------------------------------------
+    #     # 2. KD-tree: candidate search
+    #     # ------------------------------------------------------------------
+    #     P = np.array([ep.pos for ep in endpoints])
+    #     tree = cKDTree(P)
+    #     R_max = self.width_px * max_dist_factor
+    #     pairs = {}                      # node_id -> (best_cost, best_match_id)
+    #     visited_pairs = set()  # to avoid duplicates
+    #       # node_id -> sum of angles in degrees
+    #     best_pairs = set()  # to store the best pairs of endpoints
+    #     best_theta_sums = {}  # to store the best angle sums for each pair
+    #     for i, ep in enumerate(endpoints):
+    #         dists, idxs = tree.query(ep.pos, k=min(k + 1, len(endpoints)))
+    #         theta_deg_sums = {}
+    #         for dist, j in zip(dists[1:], idxs[1:]):      # skip itself (0)
+    #             ej = endpoints[j]
+    #             if ep.frag == ej.frag or dist > R_max:
+    #                 continue
+    #             # if (ep.node, ej.node) in visited_pairs or (ej.node, ep.node) in visited_pairs:
+    #             #     continue    
+    #             # ------------------------------------------------------
+    #             # 3. simple cost: distance + bending energy of 3 tangents
+    #             #    to the node then to the match then from the match to the neighbor 
+    #             # ------------------------------------------------------
+    #             # to the end point from the neighbor
+    #             tan0 = ep.tan 
+    #             # to the candidate match from the end point
+    #             tan1 = self._unit(ej.pos - ep.pos)  # unit vector
+    #             # from the candidate match to its neighbor
+    #             cand_nbr = list(self.G.neighbors(ej.node))[0]
+    #             tan2 = self._unit(np.array(self.G.nodes[cand_nbr]["pos"]) - ej.pos)
+
+
+    #             theta_deg_sums[tuple(sorted((ep.node, ej.node)))] = np.rad2deg(np.arccos(np.dot(tan0, tan1)))\
+    #                             + np.rad2deg(np.arccos(np.dot(tan1, tan2)))
+    #             visited_pairs.add((ep.node, ej.node))
+    #             # sum_theta_deg = np.rad2deg(np.arccos(np.dot(tan0, tan1)))\
+    #             #                 + np.rad2deg(np.arccos(np.dot(tan1, tan2)))
+    #             # print(f"Sum angle between {ep.node} and {ej.node}: {sum_theta_deg:.2f}°")
+    #         if theta_deg_sums:
+    #             best_pair = min(theta_deg_sums, key=theta_deg_sums.get)
+    #             if theta_deg_sums[best_pair] < 50.0:  # threshold for angle sum
+    #                 best_pairs.add(best_pair)
+    #                 best_theta_sums[best_pair] = theta_deg_sums[best_pair]
+    #     print(f"best_pairs: {best_pairs}")
+    #     # print(f"best_theta_sums: {best_theta_sums}")
+
+    #     # ------------------------------------------------------------------
+    #     # 5. build & insert bridges
+    #     # ------------------------------------------------------------------
+    #     next_id = max(self.G.nodes) + 1 if self.G.nodes else 0
+    #     for n0, n1 in best_pairs:
+    #         ep0 = next(ep for ep in endpoints if ep.node == n0)
+    #         ep1 = next(ep for ep in endpoints if ep.node == n1)
+    #         pts = self._cubic_bezier(ep0.pos, ep0.tan, ep1.pos, ep1.tan,
+    #                             n=n_bridge, λ=λ_ratio)
+
+    #         # add intermediate nodes (ignore first/last – they already exist)
+    #         new_nodes = list(range(next_id, next_id + len(pts) - 2))
+    #         next_id += len(new_nodes)
+    #         for pid, p in zip(new_nodes, pts[1:-1]):
+    #             self.G.add_node(pid, pos=p)
+    #         # connect polyline: n0 — new_nodes — n1
+    #         chain = [n0] + new_nodes + [n1]
+    #         self.G.add_edges_from(zip(chain[:-1], chain[1:]))
+
+    # def _bending_energy(self,prev_edges,next_edges, alpha=1.0):
+    #     """
+    #     Compute the bending energy between two edges.
+    #     as in discrete elastic rod model
+
+    #     :param
+    #     e_prev: previous edge vector
+    #     :param e_next: next edge vector
+    #     :param alpha: weight of the bending energy
+    #     :return: bending energy
+    #     """
+    #     # make sure the edges are 2D vectors
+    #     if prev_edges.ndim == 1:
+    #         prev_edges = prev_edges.reshape(1, -1)
+    #     if next_edges.ndim == 1:
+    #         next_edges = next_edges.reshape(1, -1)
+    #     # points: (N,2/3) tensor (requires_grad=True if torch)
+    #     e_prev = torch.from_numpy(prev_edges).float()  # (N,2/3)
+    #     e_next = torch.from_numpy(next_edges).float()  # (N,2/3)
+    #     if e_prev.size(1) == 2:
+    #         # N×2 → N×3   (append a zero z–component)
+    #         e_prev3 = F.pad(e_prev, (0, 1))        # (1,3)
+    #         e_next3 = F.pad(e_next, (0, 1))        # (1,3)
+
+    #     cross   = torch.cross(e_prev3, e_next3, dim=1)   # (1,3)
+    #     dot     = (e_prev3 * e_next3).sum(dim=1)         # (1,)
+
+    #     L_prev  = torch.linalg.norm(e_prev3, dim=1)
+    #     L_next  = torch.linalg.norm(e_next3, dim=1)
+
+    #     denom   = (L_prev * L_next + dot).clamp_min(1e-12)
+    #     kappa_b = 2.0 * cross / denom.unsqueeze(1)       # (1,3)
+
+    #     kappa2  = (kappa_b**2).sum(dim=1)                # (1,)
+    #     l_i     = 0.5 * (L_prev + L_next)                # (1,)
+    #     # E_i     = kappa2 * l_i                           # (1,) 
+    #     E_i =  kappa2                   
+    #     return E_i
     
-        # Extract control points
-        # control_points = bspline_fitting.extract_control_points(tck)
+    # def _are_same_line(self, v1: np.ndarray, v2: np.ndarray, tol: float = 1e-9) -> bool:
+    #     """
+    #     Return True if v and w are colinear and point in the same direction.
+    #     v, w are length-2 numpy arrays (or lists / tuples).
+    #     """
+    #     v = np.asarray(v1, dtype=float)
+    #     w = np.asarray(v2, dtype=float)
 
-        control_points = None
-        # Plot results
-        bspline_fitting.plot_results(points, fitted_points, control_points)
+    #     if np.linalg.norm(v) < tol or np.linalg.norm(w) < tol:
+    #         raise ValueError("Zero-length vector")
+
+    #     # scalar z-component of the 2-D cross product
+    #     cross_z = v[0]*w[1] - v[1]*w[0]
+
+    #     colinear     = abs(cross_z) < tol          # nearly zero ⇒ parallel
+    #     same_signed  = np.dot(v, w) > 0            # >0 ⇒ same direction
+
+    #     return colinear and not same_signed
+    # def _calculate_bending_energy(self, prev_node: int, curr_node: int, 
+    #                             next_node: int) -> float:
+    #     """Calculate the bending energy between three nodes."""
+    #     prev = np.asarray(self._pos_dict[prev_node])
+    #     curr = np.asarray(self._pos_dict[curr_node])
+    #     next = np.asarray(self._pos_dict[next_node])
+    #     # Check if any points are the same
+    #     prev_edges, next_edges = curr - prev, next - curr
+        
+        
+    #     if np.all(prev_edges == 0) or np.all(next_edges == 0):
+    #         return np.inf
+    #     return self._bending_energy(prev_edges, next_edges) , self._are_same_line(prev_edges, next_edges)
+    
+    # def add_bending_energy_and_prune(self, be_limit: float = 1.5) -> None:
+    #     """
+    #     Add bending energy to the graph and prune edges with high bending energy.
+        
+    #     Parameters:
+    #     -----------
+    #     be_limit : float
+    #         Maximum bending energy allowed
+    #     """
+    #     print("Adding bending energy...")
+    #     to_remove = []
+    #     for node in self.G.nodes:
+    #         if self.G.degree[node] > 1:
+    #             neighbors = list(self.G.neighbors(node))
+    #             for i in range(len(neighbors)-1):
+    #                 prev_node = neighbors[i]
+    #                 curr_node = node
+    #                 next_node = neighbors[i+1]
+    #                 be_val, same_line = self._calculate_bending_energy(prev_node, curr_node, next_node)
+    #                 if be_val > be_limit or same_line:
+    #                     to_remove.append(curr_node)
+    #                     if not self.G.has_edge(next_node, prev_node):
+    #                         self.G.add_edge(next_node, prev_node, weight=be_val)
+    #                     continue
+    #                 self.G.nodes[curr_node].setdefault("bending_energy", []).append(
+    #                         ((prev_node, next_node), be_val)
+    #                     )
+    #     # add 0 degree nodes to the list
+        
+        
+    #     self.G.remove_nodes_from(to_remove)
+    #     zero_degree_nodes = [n for n in self.G.nodes if self.G.degree[n] == 0]
+    #     self.G.remove_nodes_from(zero_degree_nodes)
+
+
+    # def _calc_sparse_distance_matrix(self,sparse_radius_factor) -> None:
+
+    #     # Get sparse distance matrix for faster neighbor lookup
+    #     self.sparse_radius = self.width_px * sparse_radius_factor
+    #     print(f"Calculating sparse distance matrix with radius {self.sparse_radius}")
+    #     S = self._kdtree.sparse_distance_matrix(self._kdtree, self.sparse_radius, output_type="coo_matrix")
+    #     # Calculate degree heuristic
+    #     if S.nnz:
+    #         # 1) “S” is a scipy.sparse.coo_matrix where each non‐zero entry
+    #         #    corresponds to a pair of nodes (i,j) that lie within your search radius.
+    #         # 2) `S.nnz` is the total number of non‐zero entries—i.e. the total number
+    #         #    of “edges” (including both directions) in your radius graph.
+            
+    #         # S.row and S.col are two arrays, each of shape (nnz,):
+    #         #   - S.row[k] = i
+    #         #   - S.col[k] = j
+    #         # means “node i has node j as a neighbor.”
+    #         #
+    #         # Because the sparse_distance_matrix is symmetric, you’ll see both (i,j)
+    #         # and (j,i) in those lists.
+    #         idx_all = np.hstack((S.row, S.col))
+    #         # Now idx_all is a single long array of length 2*nnz:
+    #         #    [ i0, i1, i2, …, j0, j1, j2, … ]
+    #         #
+    #         # Each index appears once for each neighbor‐relationship it belongs to.
+    #         neighbor_count = np.bincount(idx_all, minlength=len(self._nodes_array))
+    #         # neighbor_count[p] = number of neighbors point p has 
+    #         # (counting both directions, but that’s fine since deg(i)=deg(j)).
+    #     else:
+    #         neighbor_count = np.zeros(len(self._nodes_array), dtype=int)
+            
+    #     return neighbor_count
+    
+
+
+
+
+
+    
+
+    
+    # def _clean_close_neighbors(self, nodes: np.ndarray, min_dist: float) -> np.ndarray:
+    #     """
+    #     Remove nodes that lie within `min_dist` of any previously selected node.
+
+    #     Args:
+    #         nodes:        Array of node‐indices (e.g. your `isolated_nodes`).
+    #         min_dist:     Minimum Euclidean distance required between kept nodes.
+
+    #     Returns:
+    #         A filtered array of node‐indices with no two closer than min_dist.
+    #     """
+    #     cleaned = []
+    #     # get actual coordinates for those nodes
+    #     coords = self._coords_array[nodes]  # shape (N, 3) or (N,2) depending on dim
+
+    #     for idx, pt in zip(nodes, coords):
+    #         # check distance to all already-kept points
+    #         if all(np.linalg.norm(pt - self._coords_array[other]) > min_dist
+    #             for other in cleaned):
+    #             cleaned.append(idx)
+
+    #     return np.array(cleaned, dtype=nodes.dtype)
+
+    # def _get_isolated_nodes(self, radius_factor) -> np.ndarray:
+
+        
+    #     print("Finding isolated nodes...")
+    #     neighbor_count = self._calc_sparse_distance_matrix(sparse_radius_factor=radius_factor)
+    #     # Get best starting nodes
+    #     isolated_nodes = self._nodes_array[np.argsort(neighbor_count)[:min(50, len(neighbor_count))]]
+    #     # if the nodes are close to each other, take only one
+    #     isolated_nodes = self._clean_close_neighbors(isolated_nodes, min_dist=self.sparse_radius)
+
+    #     return isolated_nodes
+
+
+    # def remove_crowded_nodes(self,sparse_radius_factor) -> None:
+    #     """
+    #     Remove crowded nodes from the graph.
+        
+    #     Parameters:
+    #     -----------
+    #     crowded_idxs : np.ndarray
+    #         Indices of crowded nodes to be removed
+    #     """
+    #     print("Removing crowded nodes...")
+    #     neighbor_count = self._calc_sparse_distance_matrix(sparse_radius_factor=sparse_radius_factor)
+    #     crowded_idxs = np.argsort(neighbor_count)[-100:]
+    #     self._nodes_array = np.delete(self._nodes_array, crowded_idxs)
+    #     self._coords_array = np.delete(self._coords_array, crowded_idxs, axis=0)
+    #     self.G.remove_nodes_from(crowded_idxs)
+    #     self.G = nx.convert_node_labels_to_integers(
+    #                 self.G, first_label=0, ordering='sorted'
+    #             )
+    
+    
+    # def connect_all_nodes(self, radius_factor: float = 2.0) -> None:
+    #     """
+    #     Connect all nodes in the graph.
+        
+    #     Parameters:
+    #     -----------
+    #     radius_factor : float
+    #         Multiplier for search radius based on grid size
+    #     """
+    #     if not hasattr(self, 'width_px') or self.width_px is None:
+    #         raise ValueError("Width not calculated. Load a mask first.")
+            
+    #     radius = self.width_px * radius_factor
+    #     print(f"Connecting all nodes with radius {radius}")
+    #     self._refresh_spatial_index()
+
+
+    #     # Track visited nodes and paths
+    #     visited = set()
+    #     paths = []
+        
+    #     # Main connection loop
+    #     for node in self.G.nodes:
+    #         node_degree = self.G.degree[node]
+    #         if node_degree > 2:
+    #             continue
+    #         qpos = self._coords_array[node]
+    #         dist, idx = self._kdtree.query(qpos, k=5, distance_upper_bound=radius)
+    #         try:
+    #             # Get the indices of the nearest neighbors
+    #             valid = idx < len(self._nodes_array)
+    #             good_idxs = idx[valid]
+    #             candidate_nodes = self._nodes_array[good_idxs]
+    #             # remove the node itself from the candidates
+    #             candidate_nodes = candidate_nodes[candidate_nodes != node]
+    #             # remove the nodes that are already connected
+
+    #             for c in candidate_nodes:
+    #                 if self.G.has_edge(node, c):
+    #                     candidate_nodes = candidate_nodes[candidate_nodes != c]
+
+    #             for c in candidate_nodes:
+    #                 if self.G.degree[c] > 2:
+    #                     candidate_nodes = candidate_nodes[candidate_nodes != c]
+    #             if len(candidate_nodes) == 0:
+    #                 continue
+                
+    #             dist = np.linalg.norm(self._coords_array[candidate_nodes[0]] - self._coords_array[node])
+    #             self.G.add_edge(node, candidate_nodes[0], weight=float(dist))
+    #             if node_degree == 0 and len(candidate_nodes) > 1:
+    #                 dist = np.linalg.norm(self._coords_array[candidate_nodes[1]] - self._coords_array[node])
+    #                 self.G.add_edge(node, candidate_nodes[1], weight=float(dist))
+                    
+    #         except ValueError:
+    #             # Handle the case where no neighbors are found
+    #             print(f"No neighbors found for node {node}")
+    #             continue
+
+            
+    #     print("Connecting nodes...")
+    
+    # def connect_close_leaf_nodes(self, radius_factor: float = 2.0) -> None:
+        
+    #     # get the leaf nodes
+    #     leaf_nodes = [n for n in self.G.nodes if self.G.degree[n] == 1]
+        
+    #     if not leaf_nodes:
+    #         print("No leaf nodes found.")
+    #         return
+        
+    #     if not hasattr(self, 'width_px') or self.width_px is None:
+    #         raise ValueError("Width not calculated. Load a mask first.")
+    #     radius = self.width_px * radius_factor
+        
+    #     print(f"Connecting close leaf nodes with radius {radius}")
+        
+    #     self._refresh_spatial_index()
+        
+    #     # leaf_node_tree = cKDTree(self._coords_array[leaf_nodes])
+        
+    #     while len(leaf_nodes) > 0:
+    #         node = leaf_nodes.pop(0)
+    #         qpos = self._coords_array[node]
+    #         dist, idx = self._kdtree.query(qpos, k=10, distance_upper_bound=radius)
+
+    #         # Get the indices of the nearest neighbors
+    #         valid = idx < len(self._nodes_array)
+    #         good_idxs = idx[valid]
+    #         candidate_nodes = self._nodes_array[good_idxs]
+    #         # remove the node itself from the candidates
+    #         candidate_nodes = candidate_nodes[candidate_nodes != node]
+    #         candidate_nodes = candidate_nodes[np.isin(candidate_nodes, leaf_nodes)]
+    #         # add edge to the graph
+    #         if len(candidate_nodes) > 0:
+    #             candidate_node = candidate_nodes[0]
+    #             if not self.G.has_edge(node, candidate_node):
+    #                 dist = np.linalg.norm(self._coords_array[candidate_node] - self._coords_array[node])
+    #                 self.G.add_edge(node, candidate_node, weight=float(dist))
+    #                 leaf_nodes.pop(leaf_nodes.index(candidate_node))
+    #     print("Connecting close leaf nodes...")
+
+    # def find_all_paths(self)-> List[List[int]]:
+    #     """
+    #     Find all paths in the graph.
+
+    #     Returns:
+    #     --------
+    #     List[List[int]]
+    #         List of paths, where each path is a list of node indices
+    #     """
+    #     paths = []
+    #     for node in self.G.nodes:
+    #         for neighbor in self.G.neighbors(node):
+    #             if node < neighbor:
+    #                 path = nx.shortest_path(self.G, source=node, target=neighbor)
+    #                 paths.append(path)
+    #     return paths
+    # def longest_path_with_bending_energy(self, k: int = 10, be_limit: float = 1.5,
+    #                               radius_factor: float = 1.5,
+    #                               show_log: bool = False,
+    #                               iso_radius_factor: float = 10.0) -> None:
+    #     """
+    #     Connect nodes while minimizing bending energy.
+        
+    #     Parameters:
+    #     -----------
+    #     k : int
+    #         Number of nearest neighbors to consider
+    #     be_limit : float
+    #         Maximum bending energy allowed
+    #     radius_factor : float
+    #         Multiplier for search radius based on grid size
+    #     """
+    #     start_time = time.time()
+        
+    #     if not hasattr(self, 'width_px') or self.width_px is None:
+    #         raise ValueError("Width not calculated. Load a mask first.")
+            
+    #     radius = self.width_px * radius_factor
+    #     self._refresh_spatial_index()
+    #     if show_log:
+    #         print(f"Radius: {radius}")
+
+
+
+    #     best_n_ids = self._get_isolated_nodes(radius_factor=iso_radius_factor).tolist()
+
+    #     sub_G = self.G.subgraph(best_n_ids)
+
+
+    #     pos = nx.get_node_attributes(sub_G, 'pos')
+    #     nx.draw(sub_G, pos=pos, node_size=5, node_color='red',
+    #            edge_color='red', with_labels=False)
+    #     # 3. Draw grid underneath
+    #     plt.gca().set_axisbelow(True)
+    #     plt.grid(True, which='major', linestyle='--', linewidth=0.5, alpha=0.7, zorder=0)
+    #     # plt.show()
+    #     # Track visited nodes and paths
+    #     visited = set()
+    #     paths = []
+    #     new_path = True
+    #     prev_node = None
+    #     current_node = None
+    #     path = []
+    #     paths = []
+    #     graph_size = len(self.G.nodes)
+    #     # Main connection loop
+    #     while len(best_n_ids) > 0:
+
+
+    #         if new_path:
+    #             if show_log and len(path) > 1:
+    #                 print(f"PATH: {path}")
+    #                 print(f"PATH LENGTH: {len(path)}")
+                    
+
+    #             path = []
+    #             if show_log:
+    #                 print(f"---------------------------NEW PATH---------------------------")
+                    
+    #             prev_node = best_n_ids.pop(0)
+
+                
+    #             path.append(prev_node)
+    #             # visited.add(prev_node)
+                
+    #             # Find nearest unvisited node
+    #             qpos = self._coords_array[prev_node]
+    #             dist, idx = self._kdtree.query(qpos, k=2)  # self + 1
+    #             candidate_nodes = self._nodes_array[idx]
+    #             candidates = [(candidate_node, dist[i]) for i, candidate_node in enumerate(candidate_nodes)
+    #                             if candidate_node != prev_node
+    #                                 and dist[i] < radius*2]
+
+    #             if not candidates :
+    #                 if show_log:
+    #                     print(f"No candidates found for node for NEW PATH {prev_node}")
+    #                 continue
+
+    #             current_node, current_node_dist = candidates[0]
+    #             self.G.add_edge(prev_node, current_node, weight=float(current_node_dist))
+    #             path.append(current_node)
+
+    #             new_path = False
+    #             if show_log:
+    #                 print(f"from {prev_node} to {current_node}")
+                
+    #         else:
+    #             # Extend current path
+    #             qpos = self._coords_array[current_node]
+    #             dist, idx = self._kdtree.query(qpos, k=k+1)
+    #             candidate_nodes = self._nodes_array[idx]
+    #             candidates = [(candidate_node, dist[i]) for i, candidate_node in enumerate(candidate_nodes)
+    #                           if candidate_node != current_node
+    #                           and dist[i] < radius*2]
+    #             # in best_n_ids
+    #             is_in_best_n_ids = [True for c in candidates if c[0] in best_n_ids]
+    #             if not candidates or any(is_in_best_n_ids) :
+    #                 paths.append(path)
+    #                 new_path = True
+    #                 if show_log:
+    #                     print(f"No candidates found for node ENDS PATH {current_node}")
+    #                 continue
+                    
+    #             # Select candidates with acceptable bending energy
+    #             be_vals = {}
+    #             for i, candidate in enumerate(candidates):
+    #                 candidate, dist = candidate
+
+    #                 be_val, same_line = self._calculate_bending_energy(
+    #                     prev_node, current_node, candidate)
+    #                 if be_val <= be_limit and not same_line:
+    #                     # combine dist and be_val
+    #                     be_vals[candidate] = be_val
+
+                
+    #             if not be_vals:
+    #                 paths.append(path)
+    #                 new_path = True
+    #                 if show_log:
+    #                     print(f"No VALID candidates found for node ENDS PATH {current_node}")
+    #                 continue
+    #             best = min(be_vals, key=be_vals.get)
+    #             best_list = sorted(be_vals, key=be_vals.get)
+    #             while len(best_list) > 0:
+    #                 best = best_list.pop(0)
+
+    #                 # if the new edge is not passing through the graph dont add it
+    #                 current_node_pose = self._coords_array[current_node]
+    #                 best_candidate_pose = self._coords_array[best]
+    #                 rows,cols = line(current_node_pose[0], current_node_pose[1],best_candidate_pose[0], best_candidate_pose[1])
+
+    #                 # checks if the line is in the graph
+    #                 if self.mask_bool[cols, rows].all():
+    #                     if not self.G.has_edge(current_node, best):
+    #                         dist = np.linalg.norm(best_candidate_pose - current_node_pose)
+    #                         self.G.add_edge(current_node, best, weight=float(dist))
+    #                         self.G.nodes[current_node].setdefault("bending_energy", []).append(
+    #                             ((prev_node, best), be_vals[best])
+    #                         )
+
+    #                     path.append(best)
+    #                     visited.add(best)
+    #                     prev_node, current_node = current_node, best
+    #                     break
+    #                 else:
+    #                     # print("Line between {} and {} is not in the graph.".format(current_node, best))
+    #                     continue
+    #             if len(best_list) == 0:
+    #                 paths.append(path)
+    #                 new_path = True
+    #                 if show_log:
+    #                     print(f"No VALID candidates found for node ENDS PATH {current_node}")
+        
+
+        
+    #     print(f"Connected with bending energy in {time.time() - start_time:.3f} seconds")
+    #     return paths
+    # def connect_with_bending_energy(self, k: int = 10, be_limit: float = 1.5,
+    #                               radius_factor: float = 1.5,
+    #                               show_log: bool = False) -> None:
+    #     """
+    #     Connect nodes while minimizing bending energy.
+        
+    #     Parameters:
+    #     -----------
+    #     k : int
+    #         Number of nearest neighbors to consider
+    #     be_limit : float
+    #         Maximum bending energy allowed
+    #     radius_factor : float
+    #         Multiplier for search radius based on grid size
+    #     """
+    #     start_time = time.time()
+        
+    #     if not hasattr(self, 'width_px') or self.width_px is None:
+    #         raise ValueError("Width not calculated. Load a mask first.")
+            
+    #     radius = self.width_px * radius_factor
+    #     self._refresh_spatial_index()
+    #     if show_log:
+    #         print(f"Radius: {radius}")
+
+    #     best_n_ids = self._get_isolated_nodes(radius_factor=radius_factor).tolist()
+    #     # Track visited nodes and paths
+    #     visited = set()
+    #     paths = []
+    #     new_path = True
+    #     prev_node = None
+    #     current_node = None
+    #     path = []
+    #     paths = []
+
+    #     # Main connection loop
+    #     while True:
+
+    #         zero_deg = [n for n in self.G.nodes
+    #                     if self.G.degree[n] == 0
+    #                     and n not in visited]
+            
+    #         if len(zero_deg) <= 1:
+    #             break
+                
+    #         if new_path:
+    #             if show_log and len(path) > 1:
+    #                 print(f"PATH: {path}")
+    #                 print(f"PATH LENGTH: {len(path)}")
+                    
+    #             if len(path) == 2:
+    #                 self.G.remove_node(path[1])
+    #                 if show_log:
+    #                     print(f"Removed node {path[1]} from path")
+                
+    #             path = []
+    #             if show_log:
+    #                 print(f"---------------------------NEW PATH---------------------------")
+    #             # Pick a starting node
+    #             if len(best_n_ids) == 0:
+    #                 prev_node = zero_deg[0]
+    #             else:
+    #                 while best_n_ids:
+    #                     prev_node = best_n_ids.pop(0)
+    #                     if prev_node in zero_deg:
+    #                         break
+    #                 else:
+    #                     prev_node = zero_deg[0]
+                
+    #             path.append(prev_node)
+    #             visited.add(prev_node)
+                
+    #             # Find nearest unvisited node
+    #             qpos = self._coords_array[prev_node]
+    #             dist, idx = self._kdtree.query(qpos, k=2)  # self + 1
+    #             candidate_nodes = self._nodes_array[idx]
+    #             candidates = [(candidate_node, dist[i]) for i, candidate_node in enumerate(candidate_nodes)
+    #                           if candidate_node not in visited
+    #                           and dist[i] < radius*2]
+
+    #             if not candidates:
+    #                 if show_log:
+    #                     print(f"No candidates found for node for NEW PATH {prev_node}")
+    #                 continue
+
+    #             current_node, current_node_dist = candidates[0]
+    #             self.G.add_edge(prev_node, current_node, weight=float(current_node_dist))
+    #             path.append(current_node)
+    #             visited.add(current_node)
+    #             new_path = False
+    #             if show_log:
+                    
+    #                 print(f"from {prev_node} to {current_node}")
+                
+    #         else:
+    #             # Extend current path
+    #             qpos = self._coords_array[current_node]
+    #             dist, idx = self._kdtree.query(qpos, k=k+1)
+    #             candidate_nodes = self._nodes_array[idx]
+    #             candidates = [(candidate_node, dist[i]) for i, candidate_node in enumerate(candidate_nodes)
+    #                           if candidate_node not in visited
+    #                           and dist[i] < radius*2]
+
+    #             if not candidates:
+    #                 paths.append(path)
+    #                 new_path = True
+    #                 if show_log:
+    #                     print(f"No candidates found for node ENDS PATH {current_node}")
+    #                 continue
+                    
+    #             # Select candidates with acceptable bending energy
+    #             be_vals = {}
+    #             for i, candidate in enumerate(candidates):
+    #                 candidate, dist = candidate
+
+    #                 be_val, same_line = self._calculate_bending_energy(
+    #                     prev_node, current_node, candidate)
+    #                 if be_val <= be_limit and not same_line:
+    #                     # combine dist and be_val
+    #                     be_vals[candidate] = be_val
+
+                
+    #             if not be_vals:
+    #                 paths.append(path)
+    #                 new_path = True
+    #                 if show_log:
+    #                     print(f"No VALID candidates found for node ENDS PATH {current_node}")
+    #                 continue
+                
+
+
+    #             best = min(be_vals, key=be_vals.get)
+    #             best_list = sorted(be_vals, key=be_vals.get)
+    #             while len(best_list) > 0:
+    #                 best = best_list.pop(0)
+
+    #                 # if the new edge is not passing through the graph dont add it
+    #                 current_node_pose = self._coords_array[current_node]
+    #                 best_candidate_pose = self._coords_array[best]
+    #                 rows,cols = line(current_node_pose[0], current_node_pose[1],best_candidate_pose[0], best_candidate_pose[1])
+
+    #                 # checks if the line is in the graph
+    #                 if self.mask_bool[cols, rows].all():
+    #                     if not self.G.has_edge(current_node, best):
+    #                         dist = np.linalg.norm(best_candidate_pose - current_node_pose)
+    #                         self.G.add_edge(current_node, best, weight=float(dist))
+    #                         self.G.nodes[current_node].setdefault("bending_energy", []).append(
+    #                             ((prev_node, best), be_vals[best])
+    #                         )
+
+    #                     path.append(best)
+    #                     visited.add(best)
+    #                     prev_node, current_node = current_node, best
+    #                     break
+    #                 else:
+    #                     # print("Line between {} and {} is not in the graph.".format(current_node, best))
+    #                     continue
+    #             if len(best_list) == 0:
+    #                 paths.append(path)
+    #                 new_path = True
+    #                 if show_log:
+    #                     print(f"No VALID candidates found for node ENDS PATH {current_node}")
+        
+    #     # Remove isolated nodes
+    #     # self.G.remove_nodes_from([n for n in self.G.nodes if self.G.degree[n] == 0])
+        
+    #     print(f"Connected with bending energy in {time.time() - start_time:.3f} seconds")
+
+
+    
+    # def connect_nodes_by_topology(self, be_limit: float = 5.0, max_dist_factor: float = 2.0, show_log: bool = True) -> None:
+    #     """
+    #     Connect nodes in the graph by topology in two phases:
+    #     1. First connects isolated nodes (degree 0) to leaf nodes (degree 1)
+    #     2. Then connects leaf nodes (degree 1) to other leaf nodes based on bending energy
+        
+    #     Parameters:
+    #     -----------
+    #     be_limit : float
+    #         Maximum allowed bending energy for leaf-to-leaf connections
+    #     max_dist_factor : float
+    #         Maximum distance factor for connecting nodes (multiplied by width_px)
+    #     """
+    #     start_time = time.time()
+        
+    #     # Prepare spatial data
+    #     self._refresh_spatial_index()
+        
+    #     # Track connection counts
+    #     isolated_connected = 0
+    #     leaf_connected = 0
+        
+    #     # ---- PHASE 1: Connect isolated nodes to leaf nodes ----
+    #     max_dist = self.width_px * max_dist_factor
+    #             # Main connection loop
+    #     if show_log:
+    #         print(f"----------------------------PHASE 2------------------------------\n")
+    #     leaf_connected = self.connect_leaf_nodes_by_bending_energy(be_limit, max_dist_factor, show_log)
+    #     if show_log:
+    #         print(f"Max distance for connection: {max_dist}")
+    #         print(f"----------------------------PHASE 1------------------------------\n")
+    #     isolated_connected = self.connect_zero_deg_nodes(be_limit, show_log, max_dist)
+
+
+    #     # if show_log:
+    #     #     print(f"Phase 1: Connected {isolated_connected} isolated nodes in {time.time() - start_time:.3f} seconds")
+    #     if show_log:
+    #         print(f"----------------------------PHASE 2------------------------------\n")
+    #     leaf_connected = self.connect_leaf_nodes_by_bending_energy(be_limit*3, max_dist_factor, show_log)
+    #     # ---- PHASE 2: Connect leaf nodes to other leaf nodes ----
+    #     phase2_time = time.time()
+
+    #     total_time = time.time() - start_time
+    #     # if show_log:
+    #         # print(f"Phase 2: Connected {leaf_connected} leaf node pairs in {time.time() - phase2_time:.3f} seconds")
+    #         # print(f"Total: Connected {isolated_connected + leaf_connected} node pairs in {total_time:.3f} seconds")
+        
+    #     return self 
+
+    # def connect_zero_deg_nodes(self, be_limit, show_log, max_dist):
+    #     while True:
+    #         # Get current isolated and leaf nodes
+    #         isolated_nodes = [n for n in self.G.nodes if self.G.degree[n] == 0]
+    #         leaf_nodes = [n for n in self.G.nodes if self.G.degree[n] == 1]
+            
+    #         # Stop if no more isolated nodes or leaf nodes
+    #         if not isolated_nodes or not leaf_nodes:
+    #             break
+            
+    #         # Process each isolated node
+    #         connections_made = False
+            
+    #         for isolated_node in isolated_nodes:
+    #             best_leaf = None
+    #             best_dist = float('inf')
+                
+    #             # Find closest leaf node
+    #             isolated_pos = np.array(self._pos_dict[isolated_node])
+    #             leaf_nodes_to_connect = []
+    #             for i, leaf_node in enumerate(leaf_nodes):
+    #                 def check_to_connect(from_node, to_node, be_limit):
+    #                     from_node_pos = np.array(self._pos_dict[from_node])
+    #                     to_node_pos = np.array(self._pos_dict[to_node])
+    #                     dist = np.linalg.norm(from_node_pos - to_node_pos)
+                        
+    #                     if dist > max_dist:
+    #                         return False
+                        
+    #                     rows, cols = line(
+    #                     int(isolated_pos[0]), int(isolated_pos[1]),
+    #                     int(to_node_pos[0]), int(to_node_pos[1])
+    #                     )
+    #                     # line_poses = set(zip(rows, cols))
+                        
+    #                     # if line_poses.issubset(self._full_coords_set):
+    #                     if not self.mask_bool[cols, rows].all():
+    #                         return False
+                        
+    #                     # check if the resolting connection make a good bending energy
+    #                     leaf_nb = list(self.G.neighbors(to_node))[0]
+    #                     be, same_line = self._calculate_bending_energy(leaf_nb, to_node, from_node)
+    #                     if same_line or be > be_limit:
+    #                         return False
+                        
+    #                     return True
+    #                 leaf_nodes_to_connect.append(check_to_connect(isolated_node, leaf_node, be_limit))
+
+    #             # Connect to best leaf node if found
+    #             # if best_leaf is not None:
+    #             leaf_nodes_to_connect = [leaf_nodes[i] for i, leaf_node in enumerate(leaf_nodes_to_connect) if leaf_node]
+    #             if len(leaf_nodes_to_connect) == 2:
+    #                 if show_log:
+    #                     print(f"Connected isolated node {isolated_node} to leaf nodes {leaf_nodes_to_connect}")
+    #                 self.G.add_edge(isolated_node, leaf_nodes_to_connect[0], weight=float(best_dist))
+    #                 self.G.add_edge(isolated_node, leaf_nodes_to_connect[1], weight=float(best_dist))
+    #                 # isolated_connected += 1
+    #                 connections_made = True
+    #                 break
+                
+    #             if len(leaf_nodes_to_connect) == 1:
+    #                 best_leaf = leaf_nodes_to_connect[0]
+    #                 self.G.add_edge(isolated_node, best_leaf, weight=float(best_dist))
+    #                 if show_log:
+    #                     print(f"Connected isolated node {isolated_node} to leaf node {best_leaf}")
+    #                 self.G.add_edge(isolated_node, best_leaf, weight=float(best_dist))
+
+    #                 # # calculate bending energy
+    #                 # be, same_line = self._calculate_bending_energy(
+    #                 #     list(self.G.neighbors(best_leaf))[0],
+    #                 #     best_leaf,
+    #                 #     isolated_node
+    #                 # )
+    #                 # if be <= be_limit and not same_line:
+    #                 #     # Store bending energy information
+    #                 #     self.G.nodes[isolated_node].setdefault('bending_energy', []).append(
+    #                 #         ((list(self.G.neighbors(best_leaf))[0], best_leaf), be))
+    #                 #     self.G.nodes[best_leaf].setdefault('bending_energy', []).append(
+    #                 #         ((isolated_node, list(self.G.neighbors(best_leaf))[0]), be))
+    #                 #     if show_log:
+    #                 #         print(f"Added bending energy: {self.G.nodes[isolated_node]['bending_energy']}")
+    #                 #         print(f"Added bending energy: {self.G.nodes[best_leaf]['bending_energy']}")
+    #                 # self.G.nodes[best_leaf]['bending_energy'] = be
+
+    #                 # isolated_connected += 1
+    #                 connections_made = True
+    #                 # Only make one connection per iteration to ensure proper updating
+    #                 break
+                    
+    #         # If no connections were made, exit phase 1
+    #         if not connections_made:
+    #             break
+    #     return 
+
+    # def connect_leaf_nodes_by_bending_energy(self, be_limit, max_dist_factor, show_log):
+    #     processed = set()  # Track processed leaf nodes
+    #     while True:
+    #         # Get current leaf nodes (recalculated each iteration)
+    #         leaf_nodes = [n for n in self.G.nodes if self.G.degree[n] == 1 and n not in processed]
+            
+    #         # Stop if no more unprocessed leaf nodes
+    #         if not leaf_nodes:
+    #             break
+                
+    #         # Take the first unprocessed leaf node
+    #         node_1 = leaf_nodes[0]
+    #         processed.add(node_1)
+            
+    #         node_1_pos = np.array(self._pos_dict[node_1])
+            
+    #         # Find candidates with acceptable bending energy
+    #         candidates = []
+            
+    #         # Check other leaf nodes
+    #         for node_2 in leaf_nodes:
+    #             if node_2 == node_1 or self.G.has_edge(node_1, node_2):
+    #                 continue
+                    
+    #             node_2_pos = np.array(self._pos_dict[node_2])
+    #             dist = np.linalg.norm(node_2_pos - node_1_pos)
+                
+    #             # Skip if too far
+    #             if dist > self.width_px * max_dist_factor:
+    #                 continue
+                    
+    #             # Calculate bending energy
+    #             nb_1 = list(self.G.neighbors(node_1))[0]
+    #             be, same_line = self._calculate_bending_energy(nb_1, node_1, node_2)
+                
+    #             # Skip if nodes would create a straight line
+    #             if same_line:
+    #                 continue
+            
+    #             # Store candidate with its bending energy
+    #             candidates.append((node_2, be, dist))
+    #         if not candidates:
+    #             continue
+    #         # Sort candidates by bending energy
+    #         candidates.sort(key=lambda x: x[1])
+            
+    #         # Try to connect to best candidate
+    #         if candidates[0][1] <= be_limit:
+    #             best_candidate, best_be, dist = candidates[0]
+                
+    #             # Get the current neighbors of best candidate
+    #             bc_nb_1 = list(self.G.neighbors(best_candidate))[0]
+                
+    #             # Check bending energy for the best_candidate node 
+    #             best_candidate_be, best_candidate_same_line = self._calculate_bending_energy(bc_nb_1, best_candidate, node_1)
+                
+    #             # Verify the connection is valid from both ends
+    #             if not best_candidate_same_line and best_candidate_be <= be_limit:
+    #                 # Check if path through mask is valid
+    #                 rows, cols = line(
+    #                     int(node_1_pos[0]), int(node_1_pos[1]),
+    #                     int(self._pos_dict[best_candidate][0]), int(self._pos_dict[best_candidate][1])
+    #                 )
+
+    #                 if self.mask_bool[cols, rows].all():
+    #                     # Add edge with attributes
+    #                     self.G.add_edge(node_1, best_candidate, weight=float(dist))
+    #                     if show_log:
+    #                         print(f"Connected leaf node {node_1} to leaf node {best_candidate}")
+    #                     # Store bending energy information
+    #                     self.G.nodes[node_1].setdefault('bending_energy', []).append(
+    #                         ((nb_1, best_candidate), best_be))
+    #                     self.G.nodes[best_candidate].setdefault('bending_energy', []).append(
+    #                         ((bc_nb_1, node_1), best_candidate_be))
+    #                     # print the bending energy added
+    #                     if show_log:
+    #                         print(f"Added bending energy: {self.G.nodes[node_1]['bending_energy']}")
+    #                         print(f"Added bending energy: {self.G.nodes[best_candidate]['bending_energy']}")
+
+                        
+    #                     # leaf_connected += 1
+                        
+    #                     # Processed nodes are no longer leaf nodes, so remove from processed
+    #                     processed.discard(node_1)
+    #                     processed.discard(best_candidate)
+    #                 else:
+    #                     if show_log:
+    #                         print(f"Line between {node_1} and {best_candidate} is not in the graph.")
+    #     return  
+
+    # def _vector_angle(self, v1: np.ndarray, v2: np.ndarray) -> float:
+    #     """Calculate the angle between two vectors."""
+    #     v1_norm = np.linalg.norm(v1)
+    #     v2_norm = np.linalg.norm(v2)
+        
+    #     if v1_norm < 1e-9 or v2_norm < 1e-9:
+    #         return np.inf
+            
+    #     dot = np.dot(v1, v2)
+    #     cosang = np.clip(dot / (v1_norm * v2_norm), -1, 1)
+    #     return np.arccos(cosang)
+
+
+
+
+    
+
+    
+    # def get_nodes_as_array(self) -> np.ndarray:
+    #     """
+    #     Get node positions as a numpy array.
+        
+    #     Returns:
+    #     --------
+    #     np.ndarray
+    #         Array of node positions, shape (N, 2)
+    #     """
+    #     pos = nx.get_node_attributes(self.G, 'pos')
+    #     return np.array(list(pos.values()), dtype=np.int32)
+    
+    # def fit_spline(self, path: List[int], smoothing: float = 0) -> Tuple[np.ndarray, np.ndarray]:
+    #     """
+    #     Fit a spline to a path through the graph.
+        
+    #     Parameters:
+    #     -----------
+    #     path : List[int]
+    #         Ordered list of node IDs
+    #     smoothing : float
+    #         Smoothing factor for the spline
+            
+    #     Returns:
+    #     --------
+    #     Tuple[np.ndarray, np.ndarray]
+    #         x and y coordinates of the spline points
+    #     """
+    #     pos = nx.get_node_attributes(self.G, 'pos')
+    #     points = np.array([pos[node] for node in path])
+        
+    #     # Fit spline
+    #     tck, u = splprep([points[:, 0], points[:, 1]], s=smoothing)
+        
+    #     # Evaluate spline at more points for smooth curve
+    #     u_new = np.linspace(0, 1, 100)
+    #     x_new, y_new = splev(u_new, tck)
+        
+    #     return x_new, y_new
+    # def visualize_path(self, path: List[int], figsize: Tuple[int, int] = (10, 10),
+    #             node_size: int = 5, with_labels: bool = False) -> None:
+    #     """
+    #     Visualize a specific path through the graph.
+    #     """
+    #     fig, ax = plt.subplots(figsize=figsize)
+    #     ax.set_title("Path Visualization")
+    #     subG = self.G.subgraph(path)
+    #     pos = nx.get_node_attributes(subG, 'pos')
+    #     nx.draw(subG, pos=pos, node_size=node_size, edge_color='red', with_labels=with_labels, ax=ax)
+    #     # Highlight the path
+    #     path_edges = [(path[i], path[i + 1]) for i in range(len(path) - 1)]
+    #     nx.draw_networkx_edges(subG, pos=pos, edgelist=path_edges, edge_color='blue', width=2, ax=ax)
+    #     ax.invert_yaxis()  # Flip Y axis to match image coordinates
+    #     plt.pause(0.01)
+    #     return fig, ax
+
+    # def fit_bspline(self, n_control_points: int = 10, degree: int = 4, smoothing: float = None) -> Tuple[np.ndarray, np.ndarray]:
+    #     """
+    #     Fit a B-spline to a path through the graph.
+        
+    #     Parameters:
+    #     -----------
+    #     n_control_points : int
+    #         Number of control points for the B-spline
+    #     degree : int
+    #         Degree of the B-spline (typically 3 for cubic splines)
+    #     smoothing : float or None
+    #         Smoothing factor. None for interpolation, larger values for smoother fit
+            
+    #     Returns:
+    #     --------
+    #     Tuple[np.ndarray, np.ndarray]
+    #         x and y coordinates of the fitted B-spline points
+    #     """
+    #     pos = nx.get_node_attributes(self.G, 'pos')
+    #     points = np.array([pos[node] for node in pos.keys()])
+        
+    #     # Fit B-spline
+    #     # bspline_fitting.fit_bspline(points,
+    #     #                             n_control_points=n_control_points, degree=degree, smoothing=smoothing
+    #     #                             )
+        
+    #     tck, fitted_points = bspline_fitting.fit_bspline(points,
+    #                                                     #  n_control_points, degree, smoothing
+    #                                                      )
+    
+    #     # Extract control points
+    #     # control_points = bspline_fitting.extract_control_points(tck)
+
+    #     control_points = None
+    #     # Plot results
+    #     bspline_fitting.plot_results(points, fitted_points, control_points)
         
 
 
-    def get_longest_path(self) -> List[int]:
-        """
-        Get the longest path in the graph.
+    # def get_longest_path(self) -> List[int]:
+    #     """
+    #     Get the longest path in the graph.
         
-        Returns:
-        --------
-        List[int]
-            Ordered list of node IDs forming the longest path
-        """
-        longest_path = max(nx.all_pairs_dijkstra(self.G), key=lambda x: x[1][0])[0]
-        return longest_path
+    #     Returns:
+    #     --------
+    #     List[int]
+    #         Ordered list of node IDs forming the longest path
+    #     """
+    #     longest_path = max(nx.all_pairs_dijkstra(self.G), key=lambda x: x[1][0])[0]
+    #     return longest_path
+    
+    
+    # def _estimate_dlo_width(
+    #         self,
+    #         statistic: str = "max",
+    # ) -> float:
+
+    #     dist_type  = cv2.DIST_L1
+    #     mask_size  = 3                     # 3×3 kernel is the fast path
+
+    #     dist_small = cv2.distanceTransform(self.mask_bool, dist_type, mask_size)
+
+    #     if statistic == "median":
+    #         median = np.median(dist_small[dist_small > 0.0])
+    #         return float(median*2) , (dist_small > median).astype(np.uint8)
+    #     if statistic == "mean":
+    #         mean = np.mean(dist_small[dist_small > 0.0])
+    #         return float(mean*2) , (dist_small > mean).astype(np.uint8)
+    #     if statistic == "min":
+    #         min = np.min(dist_small[dist_small > 0.0])
+    #         return float(min*2) , (dist_small > min).astype(np.uint8)
+    #     if statistic == "max":
+    #         max = np.max(dist_small[dist_small > 0.0])
+    #         return float(max*2) , (dist_small > max).astype(np.uint8)
+    #     raise ValueError("statistic must be 'median', 'mean', 'min' or 'max'")
+    
+    # def _extract_branches(self) -> List[List[int]]:
+    #     # 1) gather all leaves (deg == 1)
+    #     leaves = [n for n, d in self.G.degree() if d == 1]
+
+    #     branches = []
+    #     visited = set()
+    #     for leaf in leaves:
+    #         if leaf in visited:
+    #             continue
+    #         # 2) find the “other” leaf in the same component
+    #         comp = nx.node_connected_component(self.G, leaf)
+    #         other_leaves = [ℓ for ℓ in comp if self.G.degree(ℓ) == 1 and ℓ != leaf]
+
+    #         if other_leaves:
+    #             target = other_leaves[0]
+    #             # 3) BFS‐based shortest_path is O(n+m) but on a chain it's just the unique path
+    #             path = nx.shortest_path(self.G, source=leaf, target=target)
+    #         else:
+    #             # isolated single‐node component
+    #             path = [leaf]
+
+    #         branches.append(path)
+    #         visited.update(path)
+
+    #     return branches

@@ -7,8 +7,9 @@ log/
 *.npy
 *.pkl
 *.pt
+*.pth
 archive/
-
+outputs/
 
 src/sam2_rt/__pycache__/
 *-checkpoint.ipynb
