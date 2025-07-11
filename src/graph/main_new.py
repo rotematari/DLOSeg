@@ -38,6 +38,7 @@ def get_spline(mask, config):
     Returns:
         DLOGraph: The processed graph with fitted splines.
     """
+    
     graph = DLOGraph(config=config)
     
     load_time = time.time()
@@ -49,7 +50,7 @@ def get_spline(mask, config):
 
     # Visualize initial graph
     if config['show_initial_graph']:
-        graph.visualize(node_size=config['node_size_large'], with_labels=True, title="Initial Tree Graph")
+        graph.visualize(node_size=config['node_size_large'], with_labels=False, title="Initial Tree Graph")
     prune_time = time.time()
     graph.prune_short_branches_and_delete_junctions(max_length=config['max_prune_length'])
     print(f"Time to prune branches: {time.time() - prune_time:.3f} seconds")
@@ -63,19 +64,16 @@ def get_spline(mask, config):
 
     
     if config['show_spline_graph']:
-        graph.visualize(node_size=config['node_size_small'], with_labels=True, title="Graph After Spline Fitting")
+        graph.visualize(node_size=config['node_size_small'], with_labels=False, title="Graph After Spline Fitting")
     
     start_dlo = time.time()
-    graph.reconstruct_dlo()
+    graph.reconstruct_dlo_2()
     print(f"Time to reconstruct DLO: {time.time() - start_dlo:.3f} seconds")
     if config['show_dlo_graph']:
-        graph.visualize(node_size=config['node_size_small'], with_labels=False, title="Graph After DLO Reconstruction")
-
-    print(f"Total processing time: {time.time() - start_total:.3f} seconds")
-    print("Done")
-    
+        graph.visualize(node_size=config['node_size_small'], with_labels=False, title="Graph After DLO Reconstruction",)
+    # Fit B-spline to the full graph
     graph.fit_bspline_to_graph()
-    
+    print("Done")
     return graph
 
 
@@ -266,7 +264,7 @@ if __name__ == '__main__':
 
     config = {
         # File paths
-        'mask_l_path': '/home/admina/segmetation/DLOSeg/outputs/mbest_ds/S1/gt_images/img50.png',
+        'mask_l_path': '/home/admina/segmetation/DLOSeg/outputs/mbest_ds/S3/gt_images/img12.png',
         'mask_r_path': '/home/admina/segmetation/DLOSeg/outputs/mbest_ds/S1/gt_images/img1.png',
         'img_real_path': '/home/admina/segmetation/DLOSeg/src/graph/data_720_15fps/img_04.png',
         'zed_calib_path': '/home/admina/segmetation/DLOSeg/src/zed/calibration_data/zed_2i_cal_data.yaml',
@@ -289,7 +287,7 @@ if __name__ == '__main__':
         'max_prune_length': 10,
         'dialate_iterations': 1,  # Number of iterations for dilation
         'erode_iterations': 1,  # Number of iterations for erosion
-        'max_dist_to_connect_leafs': 400,  # Maximum distance to connect leaf nodes
+        'max_dist_to_connect_leafs': 30,  # Maximum distance to connect leaf nodes
         'max_dist_to_connect_nodes': 5,  # Maximum distance to connect internal nodes
 
         # Spline fitting parameters
@@ -299,11 +297,11 @@ if __name__ == '__main__':
         },
         
         # Visualization settings
-        'on_mask': False,  # Whether to draw the mask as background
+        'on_mask': True,  # Whether to draw the mask as background
         'show_initial_graph': False,
         'show_pruned_graph': False,
-        'show_spline_graph': True,
-        'show_dlo_graph': False,
+        'show_spline_graph': False,
+        'show_dlo_graph': True,
         'show_rectification': False,
         'show_final_plots': False,
         'node_size_small': 1,
@@ -319,8 +317,6 @@ if __name__ == '__main__':
 
     zed_calibration = get_zed_calibration(config['zed_calib_path'], config['zed']['resolution'])
     # Start timing
-    start_total = time.time()
-    read_time = time.time()
 
     # plt.imshow(img_real_r, cmap='gray')
     # plt.show()
@@ -357,14 +353,14 @@ if __name__ == '__main__':
     # G_right = get_spline(rect_right,config=config)
 
 
-    # resize to original size
+    # # resize to original size
     rect_left = cv2.resize(rect_left, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
     # compute scale factors
     scale_x = orig_w / new_w
     scale_y = orig_h / new_h
-    
+
     bspline_pts_orig = G_left.full_bspline * np.array([scale_x, scale_y]) - np.array([G_left.padding_size*2, G_left.padding_size*2])
-    
+
     bspline_pts_orig = np.round(bspline_pts_orig).astype(int)
     # rect_right = cv2.resize(rect_right, (real_W,
     # plot full_bspline of left and right
