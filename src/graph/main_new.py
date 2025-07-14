@@ -72,7 +72,7 @@ def get_spline(mask, config):
     if config['show_dlo_graph']:
         graph.visualize(node_size=config['node_size_small'], with_labels=False, title="Graph After DLO Reconstruction",)
     # Fit B-spline to the full graph
-    graph.fit_bspline_to_graph()
+    # graph.fit_bspline_to_graph()
     print("Done")
     return graph
 
@@ -264,7 +264,7 @@ if __name__ == '__main__':
 
     config = {
         # File paths
-        'mask_l_path': '/home/admina/segmetation/DLOSeg/outputs/mbest_ds/S3/gt_images/img12.png',
+        'mask_l_path': '/home/admina/segmetation/DLOSeg/outputs/mbest_ds/S1/gt_images/img2.png',
         'mask_r_path': '/home/admina/segmetation/DLOSeg/outputs/mbest_ds/S1/gt_images/img1.png',
         'img_real_path': '/home/admina/segmetation/DLOSeg/src/graph/data_720_15fps/img_04.png',
         'zed_calib_path': '/home/admina/segmetation/DLOSeg/src/zed/calibration_data/zed_2i_cal_data.yaml',
@@ -297,7 +297,7 @@ if __name__ == '__main__':
         },
         
         # Visualization settings
-        'on_mask': True,  # Whether to draw the mask as background
+        'on_mask': False,  # Whether to draw the mask as background
         'show_initial_graph': False,
         'show_pruned_graph': False,
         'show_spline_graph': False,

@@ -59,12 +59,14 @@ class DLOGraph:
         downsample : int
             Downsampling factor for the mask
         """
-        pad_time = time.time()
+        print("\n-----Loading graph from mask...-----\n")
+        # pad_time = time.time()
         self.mask_origin = mask.copy()
         mask = cv2.copyMakeBorder(mask, self.padding_size, self.padding_size, self.padding_size, self.padding_size,
                                   cv2.BORDER_CONSTANT, value=0)
-        # self.mask_bool = (mask>0).view(np.uint8)
-        print(f"Padding completed in {time.time() - pad_time:.3f} seconds")
+
+        # print(f"Padding completed in {time.time() - pad_time:.3f} seconds")
+        
         # --- Dilation and Erosion ---
 
         # 1. Define a kernel
@@ -72,7 +74,8 @@ class DLOGraph:
         # A common choice is a rectangular or elliptical kernel.
         # cv2.getStructuringElement(shape, size)
         # Shape can be: cv2.MORPH_RECT, cv2.MORPH_CROSS, cv2.MORPH_ELLIPSE
-        erode_dialate_start = time.time()
+        
+        # erode_dialate_start = time.time()
         kernel_size = 3
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
 
@@ -85,18 +88,16 @@ class DLOGraph:
         # Erosion shrinks the white regions in the mask.
         
         mask = cv2.erode(mask, kernel, iterations=self.erode_iterations)
-        print(f"Dilation and erosion completed in {time.time() - erode_dialate_start:.3f} seconds")
+        # print(f"Dilation and erosion completed in {time.time() - erode_dialate_start:.3f} seconds")
         # plt.figure(figsize=(10, 8))
         # plt.imshow(self.mask_bool, cmap='gray')
         # plt.title("Processed Mask")
         # plt.show()
 
         skeletonization_start = time.time()
-        # self.width_px , self.mask_bool = self._estimate_dlo_width(statistic=config.get('statistic', 'mean'))
-        # print(f"DLO width estimation completed in {time.time() - width_estimation_start:.3f} seconds")
+
         # skeletonize 
 
-        # skel, dist = medial_axis(self.mask_bool > 0, return_distance=True)
         # should get 0-255
         mask[mask > 0] = 255
         skel = cv2.ximgproc.thinning(mask, thinningType=cv2.ximgproc.THINNING_GUOHALL)
@@ -113,21 +114,21 @@ class DLOGraph:
         self.mask_bool = (skel>0).astype(np.uint8)  # Convert to uint8 for visualization
         
         print(f"Skeletonization completed in {time.time() - skeletonization_start:.3f} seconds")
-        start_get_coords = time.time()
+        # start_get_coords = time.time()
         ys, xs = np.nonzero(self.mask_bool)
         self._coords_array = np.column_stack((xs, ys))
-        print(f"Coordinates extraction completed in {time.time() - start_get_coords:.3f} seconds")
+        # print(f"Coordinates extraction completed in {time.time() - start_get_coords:.3f} seconds")
         # plt.imshow(self.skeleton, cmap='gray')
         # plt.title("Skeletonized Mask")
         # plt.show()
         # Create initial graph
-        graph_creation_start = time.time()
+        # graph_creation_start = time.time()
         self.G = self._mask_to_simplified_graph()
-        print(f"Graph creation completed in {time.time() - graph_creation_start:.3f} seconds")
+        # print(f"Graph creation completed in {time.time() - graph_creation_start:.3f} seconds")
         
         # Start timing for spatial index refresh
-        # spatial_index_start = time.time()
-        self._refresh_spatial_index()
+        print("Done loading mask\n")
+        # self._refresh_spatial_index()
 
 
     def _refresh_spatial_index(self) -> None:
@@ -136,22 +137,58 @@ class DLOGraph:
         self._nodes_array = np.array(list(self._pos_dict.keys()), dtype=int)
         self._coords_array = np.array([self._pos_dict[n] for n in self._nodes_array], dtype=int)
 
+    def _gen_tree(self,G:nx.Graph) -> None:
+        """Generate a minimum spanning tree from the graph."""
+        return nx.minimum_spanning_tree(G, algorithm='prim')  # 'kruskal', 'prim', or 'boruvka'
 
+    # def _mask_to_simplified_graph(self) -> nx.Graph:
+    #     from scipy.sparse import csr_matrix
+    #     from scipy.sparse.csgraph import minimum_spanning_tree
+    #     coords = self._coords_array
+    #     M = coords.shape[0]
+    #     k = 3
+
+    #     # 1) k-NN ...
+    #     tree = KDTree(coords)
+    #     dists, idxs = tree.query(coords, k+1,
+    #                             distance_upper_bound=self.max_dist_to_connect_nodes)
+    #     dists = dists[:,1:]; idxs = idxs[:,1:]
+    #     mask = (idxs < M) & (~np.isinf(dists))
+
+    #     src = np.repeat(np.arange(M), k)[mask.ravel()].astype(np.int32)
+    #     dst = idxs.ravel()[mask.ravel()].astype(np.int32)
+    #     wgt = dists.ravel()[mask.ravel()]
+
+    #     # 2) Build undirected CSR with int32 indices
+    #     rows = np.concatenate([src, dst]).astype(np.int32)
+    #     cols = np.concatenate([dst, src]).astype(np.int32)
+    #     data = np.concatenate([wgt, wgt])
+    #     A = csr_matrix((data, (rows, cols)), shape=(M, M))
+
+    #     # 3) MST in C
+    #     Tcsr = minimum_spanning_tree(A).tocoo()
+
+    #     # 4) Build final nx.Graph with 'pos'
+    #     T = nx.Graph()
+    #     for i, (x,y) in enumerate(coords):
+    #         T.add_node(i, pos=(float(x), float(y)))
+    #     for u,v,w in zip(Tcsr.row, Tcsr.col, Tcsr.data):
+    #         T.add_edge(int(u), int(v), weight=float(w))
+
+    #     return T
+    
     def _mask_to_simplified_graph(self) -> nx.Graph:
         
+        edges_start = time.time()
         coords = self._coords_array          # (N,2) array of [x,y]
         H, W = self.mask_bool.shape
-        
-
-        kd_start = time.time()
         M = coords.shape[0]
         k = 3
         
         tree = KDTree(coords)
         dists, idxs = tree.query(coords, k+1,distance_upper_bound=self.max_dist_to_connect_nodes)  # idxs[:,0] is self
-        print(f"KDTree query completed in {time.time() - kd_start:.3f} seconds")
         # Filter out invalid neighbors (distances that are inf or indices that are >= M)
-        edges_start = time.time()
+        
         valid_edges = []
         for i in range(M):
             for j in range(1, k+1):  # skip self (j=0)
@@ -166,15 +203,20 @@ class DLOGraph:
         graph_time = time.time()
         G = nx.Graph()
         # add all reps as nodes (storing their 2D positions)
+        node_creation_start = time.time()
         G.add_nodes_from((i, {"pos": tuple(coords[i])}) for i in range(M))
+        print(f"Node creation completed in {time.time() - node_creation_start:.3f} seconds")
         
         # add weighted edges from the valid k-NN connections
+        edge_addition_start = time.time()
         G.add_weighted_edges_from(valid_edges)
-        tree_start = time.time()
+        print(f"Edge addition completed in {time.time() - edge_addition_start:.3f} seconds")
+        
         # extract the minimum‐spanning‐tree
-        T = nx.minimum_spanning_tree(G,algorithm='prim') # 'kruskal', 'prim', or 'boruvka'
-        # T =G 
+        tree_start = time.time()
+        T = self._gen_tree(G)  # 'kruskal', 'prim', or 'boruvka'
         print(f"Tree extraction completed in {time.time() - tree_start:.3f} seconds")
+        
         print(f"Graph creation from edges completed in {time.time() - graph_time:.3f} seconds")
         return T
 
@@ -263,7 +305,7 @@ class DLOGraph:
         
         _prune_short_branches(self.G, max_length)
         leaf_nodes = [n for n in self.G.nodes if self.G.degree[n] == 1]
-        print(f"\n-------\nPruned graph, remaining leaf nodes: {leaf_nodes}\n-------\n")
+        # print(f"\n-------\nPruned graph, remaining leaf nodes: {leaf_nodes}\n-------\n")
         
         self.leaf_nodes_poses = np.array([self.G.nodes[n]["pos"] for n in leaf_nodes])
         # remove junction nodes (nodes with degree > 2)
@@ -351,16 +393,16 @@ class DLOGraph:
         # ex_time = time.time()
         # branches = self._extract_branches()
         # print(f"Extracted {len(branches)} branches in {time.time() - ex_time:.3f} seconds")
-        ex_time = time.time()
+        # ex_time = time.time()
         branches = self._extract_branches()
-        print(f"Extracted_0 {len(branches)} branches in {time.time() - ex_time:.3f} seconds")
+        # print(f"Extracted_0 {len(branches)} branches in {time.time() - ex_time:.3f} seconds")
         
         branches_coords = []
         for branch in branches:
             coords = np.array([self.G.nodes[n]["pos"] for n in branch])
             branches_coords.append(coords)
         
-        smooth_time = time.time()
+        # smooth_time = time.time()
         # Fit B-spline to each branch
         smoothed_branches = []
         
@@ -374,12 +416,12 @@ class DLOGraph:
             )
             smoothed_branches.append(smooth_2d_branch)
         
-        print(f"Fitted {len(smoothed_branches)} branches in {time.time() - smooth_time:.3f} seconds")
+        # print(f"Fitted {len(smoothed_branches)} branches in {time.time() - smooth_time:.3f} seconds")
         
         start_generation = time.time()
         # Generate new graph from the smoothed branches
         self.G = self._create_graph_from_branches(smoothed_branches)
-        print(f"Generated graph from branches in {time.time() - start_generation:.3f} seconds")
+        # print(f"Generated graph from branches in {time.time() - start_generation:.3f} seconds")
 
     
     def _get_unit_vector(self,v: np.ndarray) -> np.ndarray:
@@ -478,7 +520,7 @@ class DLOGraph:
         if not dlo_path:
             print("No path found between the two ends of the DLO.")
             return
-        print(f"Reconstructed DLO path with {len(dlo_path)} nodes.")
+        # print(f"Reconstructed DLO path with {len(dlo_path)} nodes.")
 
         self.dlo_path = dlo_path
 
@@ -493,7 +535,7 @@ class DLOGraph:
 
         
         self.full_bspline = fitted_points
-        print(f"Fitted B-spline with {len(fitted_points)} points.")
+        # print(f"Fitted B-spline with {len(fitted_points)} points.")
 
     def visualize(self, figsize: Tuple[int, int] = (10, 10), 
                 node_size: int = 5, with_labels: bool = False,title: str="") -> None:
