@@ -10,7 +10,8 @@ log/
 *.pth
 archive/
 outputs/
-
+frames_*
+*.webm
 src/sam2_rt/__pycache__/
 *-checkpoint.ipynb
 *.egg*

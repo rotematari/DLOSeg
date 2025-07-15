@@ -6,6 +6,8 @@ from scipy.interpolate import UnivariateSpline
 import time
 from scipy.interpolate import splprep, splev
 from scipy.signal import savgol_filter
+
+
 def smooth_2d_branch_savgol(coords: np.ndarray,
                             window_length: int = 11,
                             polyorder: int = 2) -> np.ndarray:
@@ -103,7 +105,7 @@ def fit_bspline(points,n_points=100,k=3):
     """
     # Extract x and y coordinates
 
-    spl , u = interpolate.splprep(points.T, k = k,s = len(points)*1e-4)
+    spl , u = interpolate.splprep(points.T, k = k,s = len(points)*1e-2)
     
     # Generate points along the B-spline
     u_fine = np.linspace(0, 1, n_points)

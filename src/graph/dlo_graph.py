@@ -5,12 +5,11 @@ import time
 from typing import Optional, List, Dict, Any,Tuple
 import matplotlib.pyplot as plt
 from scipy.spatial import KDTree
-import logging
+from scipy.interpolate import CubicHermiteSpline
 
 from graph import bspline_fitting
+from itertools import combinations
 
-from sklearn.neighbors import kneighbors_graph
-from scipy.sparse.csgraph import minimum_spanning_tree
 
 class DLOGraph:
     """
@@ -37,7 +36,7 @@ class DLOGraph:
         self._nodes_array = None
         self._mask_bool = None
         self.mask_origin = None
-        self.full_bspline = None
+        self.full_bsplins = []
         
         
         self.padding_size = config.get('padding_size', 4)
@@ -59,7 +58,7 @@ class DLOGraph:
         downsample : int
             Downsampling factor for the mask
         """
-        print("\n-----Loading graph from mask...-----\n")
+        # print("\n-----Loading graph from mask...-----\n")
         # pad_time = time.time()
         self.mask_origin = mask.copy()
         mask = cv2.copyMakeBorder(mask, self.padding_size, self.padding_size, self.padding_size, self.padding_size,
@@ -79,16 +78,16 @@ class DLOGraph:
         kernel_size = 3
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
 
-        # 2. Apply Dilation
-        # Dilation expands the white regions in the mask.
+        # # 2. Apply Dilation
+        # # Dilation expands the white regions in the mask.
         
         mask = cv2.dilate(mask, kernel, iterations=self.dialate_iterations)
 
-        # 3. Apply Erosion
-        # Erosion shrinks the white regions in the mask.
+        # # 3. Apply Erosion
+        # # Erosion shrinks the white regions in the mask.
         
         mask = cv2.erode(mask, kernel, iterations=self.erode_iterations)
-        # print(f"Dilation and erosion completed in {time.time() - erode_dialate_start:.3f} seconds")
+        # # print(f"Dilation and erosion completed in {time.time() - erode_dialate_start:.3f} seconds")
         # plt.figure(figsize=(10, 8))
         # plt.imshow(self.mask_bool, cmap='gray')
         # plt.title("Processed Mask")
@@ -100,20 +99,22 @@ class DLOGraph:
 
         # should get 0-255
         mask[mask > 0] = 255
-        skel = cv2.ximgproc.thinning(mask, thinningType=cv2.ximgproc.THINNING_GUOHALL)
-        # fig, ax = plt.subplots()
-        # # draw the original mask in gray
-        # ax.imshow(self.mask_origin, cmap='gray')
-        # # overlay the skeleton in blue with 60% opacity
-        # ax.imshow(skel, cmap='Blues', alpha=0.6)
-
-        # ax.set_title("Skeletonized Mask")
-        # ax.axis('off')     # hide axes if you like
-        # plt.tight_layout()
-        # plt.show()
-        self.mask_bool = (skel>0).astype(np.uint8)  # Convert to uint8 for visualization
+        mask[mask <= 0] = 0
         
-        print(f"Skeletonization completed in {time.time() - skeletonization_start:.3f} seconds")
+        # plt.imshow(mask, cmap='gray')
+        # plt.title("Processed Mask")
+        # plt.axis('off')
+        # plt.show()
+        skel = cv2.ximgproc.thinning(mask, thinningType=cv2.ximgproc.THINNING_GUOHALL)
+
+
+        self.mask_bool = (skel>0).astype(np.uint8)  # Convert to uint8 for visualization
+        # plt.imshow(self.mask_bool, cmap='gray')
+        # plt.title("Skeletonized Mask")
+        # plt.axis('off')
+        # plt.show()
+        
+        # print(f"Skeletonization completed in {time.time() - skeletonization_start:.3f} seconds")
         # start_get_coords = time.time()
         ys, xs = np.nonzero(self.mask_bool)
         self._coords_array = np.column_stack((xs, ys))
@@ -127,7 +128,7 @@ class DLOGraph:
         # print(f"Graph creation completed in {time.time() - graph_creation_start:.3f} seconds")
         
         # Start timing for spatial index refresh
-        print("Done loading mask\n")
+        # print("Done loading mask\n")
         # self._refresh_spatial_index()
 
 
@@ -141,42 +142,6 @@ class DLOGraph:
         """Generate a minimum spanning tree from the graph."""
         return nx.minimum_spanning_tree(G, algorithm='prim')  # 'kruskal', 'prim', or 'boruvka'
 
-    # def _mask_to_simplified_graph(self) -> nx.Graph:
-    #     from scipy.sparse import csr_matrix
-    #     from scipy.sparse.csgraph import minimum_spanning_tree
-    #     coords = self._coords_array
-    #     M = coords.shape[0]
-    #     k = 3
-
-    #     # 1) k-NN ...
-    #     tree = KDTree(coords)
-    #     dists, idxs = tree.query(coords, k+1,
-    #                             distance_upper_bound=self.max_dist_to_connect_nodes)
-    #     dists = dists[:,1:]; idxs = idxs[:,1:]
-    #     mask = (idxs < M) & (~np.isinf(dists))
-
-    #     src = np.repeat(np.arange(M), k)[mask.ravel()].astype(np.int32)
-    #     dst = idxs.ravel()[mask.ravel()].astype(np.int32)
-    #     wgt = dists.ravel()[mask.ravel()]
-
-    #     # 2) Build undirected CSR with int32 indices
-    #     rows = np.concatenate([src, dst]).astype(np.int32)
-    #     cols = np.concatenate([dst, src]).astype(np.int32)
-    #     data = np.concatenate([wgt, wgt])
-    #     A = csr_matrix((data, (rows, cols)), shape=(M, M))
-
-    #     # 3) MST in C
-    #     Tcsr = minimum_spanning_tree(A).tocoo()
-
-    #     # 4) Build final nx.Graph with 'pos'
-    #     T = nx.Graph()
-    #     for i, (x,y) in enumerate(coords):
-    #         T.add_node(i, pos=(float(x), float(y)))
-    #     for u,v,w in zip(Tcsr.row, Tcsr.col, Tcsr.data):
-    #         T.add_edge(int(u), int(v), weight=float(w))
-
-    #     return T
-    
     def _mask_to_simplified_graph(self) -> nx.Graph:
         
         edges_start = time.time()
@@ -198,90 +163,128 @@ class DLOGraph:
                 # Check if neighbor is valid (not inf distance and valid index)
                 if not np.isinf(neighbor_dist) and neighbor_idx < M:
                     valid_edges.append((i, neighbor_idx, neighbor_dist))
-        print(f"Edge filtering completed in {time.time() - edges_start:.3f} seconds")
+        # print(f"Edge filtering completed in {time.time() - edges_start:.3f} seconds")
         # Create a graph from the valid edges
         graph_time = time.time()
         G = nx.Graph()
         # add all reps as nodes (storing their 2D positions)
         node_creation_start = time.time()
         G.add_nodes_from((i, {"pos": tuple(coords[i])}) for i in range(M))
-        print(f"Node creation completed in {time.time() - node_creation_start:.3f} seconds")
+        # print(f"Node creation completed in {time.time() - node_creation_start:.3f} seconds")
         
         # add weighted edges from the valid k-NN connections
         edge_addition_start = time.time()
         G.add_weighted_edges_from(valid_edges)
-        print(f"Edge addition completed in {time.time() - edge_addition_start:.3f} seconds")
+        # print(f"Edge addition completed in {time.time() - edge_addition_start:.3f} seconds")
         
         # extract the minimum‐spanning‐tree
         tree_start = time.time()
         T = self._gen_tree(G)  # 'kruskal', 'prim', or 'boruvka'
-        print(f"Tree extraction completed in {time.time() - tree_start:.3f} seconds")
+        # print(f"Tree extraction completed in {time.time() - tree_start:.3f} seconds")
         
-        print(f"Graph creation from edges completed in {time.time() - graph_time:.3f} seconds")
+        # print(f"Graph creation from edges completed in {time.time() - graph_time:.3f} seconds")
         return T
 
 
+    def _prune_path_between_3_degree_nodes(self, nodes: list) -> None:
+        """
+        Prunes paths between nodes of degree 3 in the graph.
 
+        Args:
+            nodes: A list of node IDs with degree 3.
+            max_length: The maximum length of the path to keep.
+        """
+        # find all pairs of nodes with degree 3
+
+        available_nodes = set(nodes.copy())
+        for node in nodes:
+            # print(f"Processing node {node}")
+            paths = []
+            for target in nodes:
+                if node == target:
+                    continue
+                try:
+                    # Find the shortest path between the two nodes
+                    if node in available_nodes and target in available_nodes:
+                        # Use NetworkX to find the shortest path
+                        # print(f"Finding path from {node} to {target}")
+                        path = nx.shortest_path(self.G, source=node, target=target)
+                        paths.append(path)
+                except nx.NetworkXNoPath:
+                    continue
+                
+            # If there are no paths, continue
+            if not paths:
+                continue
+            # Find the shortest path
+            shortest_path = min(paths, key=len)
+            self.G.remove_nodes_from(shortest_path)  # Remove intermediate nodes
+            available_nodes.discard(shortest_path[0])  # Remove the current node from available nodes
+            available_nodes.discard(shortest_path[-1])  # Remove the target node from available nodes
+            # print(f"Pruned path between {shortest_path[0]} and {shortest_path[-1]}")
+            # print(f"Available nodes after pruning: {available_nodes}")
+
+    def _prune_short_branches(self, G: nx.Graph, min_length: int) -> None:
+        """
+        Prunes short, dead-end branches from a graph.
+
+        A branch is a path of nodes with degree 2, ending in a leaf node (degree 1).
+        This function removes branches where the path length is less than `min_length`.
+
+        Args:
+            G: The graph to prune, modified in-place.
+            min_length: The minimum number of nodes a branch must have to be kept.
+                        A branch of length 1 is a single leaf connected to a junction.
+        """
+        # Use a set for efficient additions and membership testing
+        nodes_to_prune = set()
+        
+        # A set to ensure we don't traverse the same branch from different ends
+        visited_branch_nodes = set()
+
+        # Find all leaf nodes (degree 1) to start our traversals from
+        leaf_nodes = [n for n in G.nodes if G.degree[n] == 1]
+
+        for leaf in leaf_nodes:
+            if leaf in visited_branch_nodes:
+                continue
+
+            path = [leaf]
+            curr = leaf
+            prev = None
+
+            while True:
+                # Mark the current node as visited for this branch traversal
+                visited_branch_nodes.add(curr)
+                
+                # Find the next node in the path that isn't the previous one
+                neighbors = [n for n in G.neighbors(curr) if n != prev]
+
+                # A proper branch node has exactly one "forward" neighbor and a degree of 2.
+                # The starting leaf has a degree of 1.
+                # If we find more than one neighbor, or the neighbor has a degree > 2,
+                # we've hit a junction and the end of the branch.
+                if len(neighbors) != 1 or G.degree(neighbors[0]) != 2:
+                    # End of the branch found
+                    break
+
+                prev = curr
+                curr = neighbors[0]
+                path.append(curr)
+
+            # After finding the full branch, check if it's too short
+            if len(path) < min_length:
+                nodes_to_prune.update(path)
+
+        # Remove all identified short-branch nodes at once
+        G.remove_nodes_from(nodes_to_prune)
     def prune_short_branches_and_delete_junctions(self,max_length: int) -> None:
 
 
         """
         prune leaf branches longer than max_length
         """
-        def _prune_short_branches(G: nx.Graph, min_length: int) -> None:
-            """
-            Prunes short, dead-end branches from a graph.
 
-            A branch is a path of nodes with degree 2, ending in a leaf node (degree 1).
-            This function removes branches where the path length is less than `min_length`.
-
-            Args:
-                G: The graph to prune, modified in-place.
-                min_length: The minimum number of nodes a branch must have to be kept.
-                            A branch of length 1 is a single leaf connected to a junction.
-            """
-            # Use a set for efficient additions and membership testing
-            nodes_to_prune = set()
-            
-            # A set to ensure we don't traverse the same branch from different ends
-            visited_branch_nodes = set()
-
-            # Find all leaf nodes (degree 1) to start our traversals from
-            leaf_nodes = [n for n in G.nodes if G.degree[n] == 1]
-
-            for leaf in leaf_nodes:
-                if leaf in visited_branch_nodes:
-                    continue
-
-                path = [leaf]
-                curr = leaf
-                prev = None
-
-                while True:
-                    # Mark the current node as visited for this branch traversal
-                    visited_branch_nodes.add(curr)
-                    
-                    # Find the next node in the path that isn't the previous one
-                    neighbors = [n for n in G.neighbors(curr) if n != prev]
-
-                    # A proper branch node has exactly one "forward" neighbor and a degree of 2.
-                    # The starting leaf has a degree of 1.
-                    # If we find more than one neighbor, or the neighbor has a degree > 2,
-                    # we've hit a junction and the end of the branch.
-                    if len(neighbors) != 1 or G.degree(neighbors[0]) != 2:
-                        # End of the branch found
-                        break
-
-                    prev = curr
-                    curr = neighbors[0]
-                    path.append(curr)
-
-                # After finding the full branch, check if it's too short
-                if len(path) < min_length:
-                    nodes_to_prune.update(path)
-
-            # Remove all identified short-branch nodes at once
-            G.remove_nodes_from(nodes_to_prune)
             
         
         # connect leaf nodes if they close enough
@@ -302,16 +305,23 @@ class DLOGraph:
             norm = np.linalg.norm(all_poses[i] - all_poses[j])
             if norm <= 3:
                 self.G.add_edge(i, j)
-        
-        _prune_short_branches(self.G, max_length)
+
+        self._prune_short_branches(self.G, max_length)
         leaf_nodes = [n for n in self.G.nodes if self.G.degree[n] == 1]
-        # print(f"\n-------\nPruned graph, remaining leaf nodes: {leaf_nodes}\n-------\n")
         
+        # save leaf nodes positions for later use
+        self.ends_leaf_nodes = leaf_nodes
         self.leaf_nodes_poses = np.array([self.G.nodes[n]["pos"] for n in leaf_nodes])
+        
+
+        three_degree_nodes = [n for n in self.G.nodes if self.G.degree[n] == 3]
+        if len(three_degree_nodes) > 0:
+            self._prune_path_between_3_degree_nodes(three_degree_nodes)
+
         # remove junction nodes (nodes with degree > 2)
         junction_nodes = [n for n in self.G.nodes if self.G.degree[n] > 2]
         self.G.remove_nodes_from(junction_nodes)
-        _prune_short_branches(self.G, max_length)
+        self._prune_short_branches(self.G, max_length)
         # prune 0 degree nodes
         zero_degree_nodes = [n for n in self.G.nodes if self.G.degree[n] == 0]
         self.G.remove_nodes_from(zero_degree_nodes)
@@ -430,6 +440,7 @@ class DLOGraph:
         """
         n = np.linalg.norm(v)
         return v / n if n > 0 else v
+
     def _process_leaf_cluster(self, cluster: List[int]) -> None:
         """
         Process a cluster of leaf nodes to find the best configuration for connecting them.
@@ -470,7 +481,7 @@ class DLOGraph:
                 return angle1 + angle2
 
         # get all configurations 
-        from itertools import combinations
+
         combs = list(combinations(cluster, 2))
         # find the 2 best combinations
         angle_sums = {}
@@ -489,8 +500,9 @@ class DLOGraph:
         best_comb = min(angle_sums, key=angle_sums.get)
         # print(f"Best Combination: {best_comb}, Angle Sum: {angle_sums[best_comb]}")
         for comb in best_comb:
-            if not self.G.has_edge(comb[0], comb[1]):
-                self.G.add_edge(comb[0], comb[1])
+            if not self.G.has_edge(comb[0], comb[1]) and comb[0] != comb[1]:
+                if comb[0] not in self.ends_leaf_nodes and comb[1] not in self.ends_leaf_nodes:
+                    self.G.add_edge(comb[0], comb[1])
         # print("done")
 
     def reconstruct_dlo_2(self):
@@ -498,7 +510,8 @@ class DLOGraph:
         """
         Find clusters of leaf nodes and find the best configuration for connecting them.
         """
-        leaf_nodes = [n for n in self.G.nodes if self.G.degree[n] == 1]
+        leaf_nodes = [n for n in self.G.nodes if self.G.degree[n] == 1 
+                      and n not in self.ends_leaf_nodes]
         leaf_poses = np.array([self.G.nodes[n]["pos"] for n in leaf_nodes])
         
         # cluster leaf nodes 
@@ -516,25 +529,28 @@ class DLOGraph:
         for cluster in leaf_clusters:
             self._process_leaf_cluster(cluster)
 
-        dlo_path = list(nx.simple_paths.all_simple_paths(self.G, source=self.ends_leaf_nodes[0], target=self.ends_leaf_nodes[1]))
-        if not dlo_path:
-            print("No path found between the two ends of the DLO.")
-            return
-        # print(f"Reconstructed DLO path with {len(dlo_path)} nodes.")
 
-        self.dlo_path = dlo_path
 
     def fit_bspline_to_graph(self):
+        leaf_nodes = [n for n in self.G.nodes if self.G.degree[n] == 1]
+        comb = list(combinations(leaf_nodes, 2))
+        ends_pairs = []
         
-        if not hasattr(self, 'dlo_path'):
-            print("DLO path not found. Please run reconstruct_dlo_2() first.")
-            return
-        path_coords = np.array([self.G.nodes[n]["pos"] for n in self.dlo_path])
+        for u, v in comb:
+            try:
+                dlo_path = np.array(list(nx.shortest_path(self.G, source=u, target=v)))
+            except nx.NetworkXNoPath:
+                dlo_path = np.array([])
+                # print(f"No path found between {u} and {v}.")
+                continue
+            
+            if dlo_path.ndim > 1:
+                dlo_path = dlo_path[0]
+            path_coords = np.array([self.G.nodes[n]["pos"] for n in dlo_path])
         
-        spl, fitted_points = bspline_fitting.fit_bspline(path_coords,n_points=500,k=3)
+            # spl, fitted_points = bspline_fitting.fit_bspline(path_coords,n_points=500,k=5)
 
-        
-        self.full_bspline = fitted_points
+            self.full_bsplins.append(path_coords)
         # print(f"Fitted B-spline with {len(fitted_points)} points.")
 
     def visualize(self, figsize: Tuple[int, int] = (10, 10), 
@@ -593,104 +609,3 @@ class DLOGraph:
         plt.pause(0.01)
         return 
 
-    def reconstruct_dlo(self):
-        """
-        Reconnects disjointed graph fragments into a single continuous DLO.
-
-        This method intelligently adds edges between leaf nodes (endpoints) of different
-        fragments by finding pairs that are geometrically well-aligned, minimizing
-        the bending energy of the connection.
-        """
-        # 1. Gather all leaf nodes and their properties.
-        all_leaf_nodes = {n for n in self.G.nodes if self.G.degree[n] == 1}
-        if len(all_leaf_nodes) < 2:
-            print("Not enough leaf nodes to reconstruct.")
-            return
-
-        comp_id_map = {n: i for i, c in enumerate(nx.connected_components(self.G)) for n in c}
-        leaf_pairs = {}
-        for n1 in all_leaf_nodes:
-            for n2 in all_leaf_nodes:
-                if n1 != n2 and comp_id_map.get(n1) == comp_id_map.get(n2):
-                    leaf_pairs[n1] = n2
-                    break
-
-        # find the start and end nodes 
-        # by finding the most isolated leafnodes 
-        ends_leaf_nodes = self.ends_leaf_nodes
-        # update available_leaves
-        available_leaves = [n for n in all_leaf_nodes if n not in ends_leaf_nodes]
-        available_leaves = set(available_leaves)
-        if not ends_leaf_nodes or ends_leaf_nodes[0] not in leaf_pairs:
-            raise ValueError("could not find most isolated leaf nodes or their pairs in the graph.")
-            
-
-        # The reconstruction will start from the other end of the most isolated fragment.
-        start_node = leaf_pairs[ends_leaf_nodes[0]]
-        
-        
-        while len(available_leaves) > 0:
-
-            # Find start node neighbours 
-            start_pos = np.array(self.G.nodes[start_node]["pos"])
-            start_node_nbr = next(iter(self.G.neighbors(start_node)), None)
-
-            # Get the tangent vector from the start node to its neighbor.
-            tan0 = self._get_unit_vector(start_pos - np.array(self.G.nodes[start_node_nbr]["pos"]))
-
-            # The candidate pool is all other available leaves.
-            candidate_pool = available_leaves - {start_node, leaf_pairs.get(start_node)}
-            if not candidate_pool:
-                break
-
-            theta_deg_sums = {}
-            for cand_node in candidate_pool:
-                cand_pos = np.array(self.G.nodes[cand_node]["pos"])
-                dist_from_current = np.linalg.norm(start_pos - cand_pos)
-                # Check if the candidate is within the maximum distance to connect leafs.
-                if dist_from_current > self.max_dist_to_connect_leafs:
-                    continue
-                # tangent vector from the start node to the candidate.
-                tan1 = self._get_unit_vector(cand_pos - start_pos)
-                cand_nbr = next(iter(self.G.neighbors(cand_node)), None)
-                if cand_nbr is None: continue
-                # tangent vector from the candidate to its neighbor.
-                tan2 = self._get_unit_vector(np.array(self.G.nodes[cand_nbr]["pos"]) - cand_pos)
-                
-                angle1 = np.rad2deg(np.arccos(np.clip(np.dot(tan0, tan1), -1.0, 1.0)))
-                angle2 = np.rad2deg(np.arccos(np.clip(np.dot(tan1, tan2), -1.0, 1.0)))
-                theta_deg_sums[cand_node] = angle1 + angle2
-            
-            # 5. Make the connection if a suitable candidate was found.
-            if not theta_deg_sums:
-                # No valid candidate found for this start_node. It's a dead-end.
-                # Remove it from consideration and try to start a new chain in the next iteration.
-                print(f"No valid candidates found for current node {start_node}.")
-                start_node = ends_leaf_nodes[1]  # Reset to the most isolated leaf
-                continue
-
-            best_cand = min(theta_deg_sums, key=theta_deg_sums.get)
-            self.G.add_edge(start_node, best_cand)
-            
-            # 6. Update the set of available leaves and set the next start_node.
-            available_leaves.discard(start_node)
-            available_leaves.discard(best_cand)
-
-            # The next start_node will be the other end of the fragment we just connected to.
-            if best_cand in leaf_pairs:
-                start_node = leaf_pairs[best_cand]
-                if start_node in ends_leaf_nodes:
-                    # If we connected to the most isolated leaf, we can stop.
-                    print(f"Found the end leaf node: {start_node}.")
-                    break
-            else:
-                # We connected to a fragment without a pair, so we must find a new starting point.
-                # The loop will handle this by re-evaluating on the next iteration.
-                start_node = None
-        
-        # Final step
-        # get the longest path in the graph
-        self.dlo_path = list(nx.simple_paths.all_simple_paths(self.G, source=ends_leaf_nodes[0], target=ends_leaf_nodes[1]))[0]
-        if not self.dlo_path:
-            logging.warning("No path found between the most isolated leaf nodes.")
-            return
