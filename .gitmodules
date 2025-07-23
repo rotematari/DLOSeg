@@ -4,13 +4,7 @@
 [submodule "src/FoundationStereo"]
 	path = src/FoundationStereo
 	url = https://github.com/NVlabs/FoundationStereo.git
-
 [submodule "src/segment_anything_2_real_time"]
 	path = src/segment_anything_2_real_time
 	url = https://github.com/Gy920/segment-anything-2-real-time.git
-[submodule "src/handloom"]
-	path = src/handloom
-	url = https://github.com/vainaviv/handloom.git
-[submodule "src/dlo_perceiver"]
-	path = src/dlo_perceiver
-	url = https://github.com/lar-unibo/dlo_perceiver.git
+
