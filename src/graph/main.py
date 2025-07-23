@@ -264,7 +264,7 @@ if __name__ == '__main__':
 
     config = {
         # File paths
-        'mask_l_path': '/home/admina/segmetation/DLOSeg/frames_output/frame_001282.png',
+        'mask_l_path': 'DATASETS/SBHC/S3/images/img0.jpg',
         'mask_r_path': '/home/admina/segmetation/DLOSeg/outputs/mbest_ds/S1/gt_images/img1.png',
         'img_real_path': '/home/admina/segmetation/DLOSeg/src/graph/data_720_15fps/img_04.png',
         'zed_calib_path': '/home/admina/segmetation/DLOSeg/src/zed/calibration_data/zed_2i_cal_data.yaml',
@@ -298,10 +298,10 @@ if __name__ == '__main__':
         
         # Visualization settings
         'on_mask': False,  # Whether to draw the mask as background
-        'show_initial_graph': True,
-        'show_pruned_graph': True,
-        'show_spline_graph': True,
-        'show_dlo_graph': True,
+        'show_initial_graph': False,
+        'show_pruned_graph': False,
+        'show_spline_graph': False,
+        'show_dlo_graph': False,
         'show_rectification': False,
         'show_final_plots': False,
         'node_size_small': 1,
@@ -326,14 +326,14 @@ if __name__ == '__main__':
     rect_left,rect_right = img_real_l, img_real_r
     rect_left = cv2.threshold(rect_left, 80, 255, cv2.THRESH_BINARY)[1]
     # visualize_rectification(img_real_l, img_real_r, rect_left, rect_right)
-    # plt.figure()
-    # plt.imshow(rect_left, cmap='gray')
+    plt.figure()
+    plt.imshow(rect_left, cmap='gray')
     # plt.title('Rectified Left Image')
     # plt.pause(0.1)
     # plt.figure()
     # plt.imshow(rect_right, cmap='gray')
     # plt.title('Rectified Right Image')
-    # plt.pause(0.1)
+    plt.pause(0.1)
     # resize image to 256 
     
     orig_h, orig_w = rect_left.shape
@@ -341,7 +341,7 @@ if __name__ == '__main__':
     if orig_h > 256 or orig_w > 256:
         print(f"Resizing images from {orig_h}x{orig_w} to 256x256")
         rect_left = cv2.resize(rect_left, (new_h, new_w), interpolation=cv2.INTER_LINEAR)
-        rect_right = cv2.resize(rect_right, (new_h, new_w), interpolation=cv2.INTER_LINEAR)
+        # rect_right = cv2.resize(rect_right, (new_h, new_w), interpolation=cv2.INTER_LINEAR)
     else:
         print(f"Images are already smaller than 128x128, no resizing needed")
 
@@ -370,14 +370,4 @@ if __name__ == '__main__':
     ax1.set_title('Left Full B-spline')
     ax1.axis('equal')
     ax1.legend()
-    # ax1.invert_yaxis()
-    # ax2.plot(G_right.full_bspline[:, 0], G_right.full_bspline[:, 1], 'b-', label='Right Full B-spline')
-    # ax2.invert_yaxis()
-    # ax2.set_title('Right Full B-spline')
-    # ax2.axis('equal')
-    # ax2.legend()
     plt.show()
-    # print(f"Left graph nodes: {len(G_left.nodes())}, edges: {len(G_left.edges())}")
-
-
-    # spline matching
