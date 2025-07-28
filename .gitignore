@@ -17,7 +17,7 @@ src/sam2_rt/__pycache__/
 *.egg*
 build/*
 _C.*
-
+src/segmentors/MobileSAMv2/weight
 # src/sam2_realtime/outputs/*
 # src/sam2_realtime/checkpoints/*.pt
 # src/sam2_realtime/notebooks/
