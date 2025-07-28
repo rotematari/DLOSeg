@@ -36,9 +36,9 @@ class DLOGraph:
         self._nodes_array = None
         self._mask_bool = None
         self.mask_origin = None
-        self.full_bsplins = []
-        
-        
+        self.full_bsplines = []
+
+
         self.padding_size = config.get('padding_size', 4)
         self.dialate_iterations = config.get('dialate_iterations', 2)
         self.erode_iterations = config.get('erode_iterations', 2)
@@ -208,7 +208,10 @@ class DLOGraph:
                     if node in available_nodes and target in available_nodes:
                         # Use NetworkX to find the shortest path
                         # print(f"Finding path from {node} to {target}")
-                        path = nx.shortest_path(self.G, source=node, target=target)
+                        if self.G.has_edge(node, target):
+                            path = [node, target]
+                        else:
+                            path = nx.shortest_path(self.G, source=node, target=target)
                         paths.append(path)
                 except nx.NetworkXNoPath:
                     continue
@@ -278,6 +281,47 @@ class DLOGraph:
 
         # Remove all identified short-branch nodes at once
         G.remove_nodes_from(nodes_to_prune)
+
+    def _connect_leaf_nodes(self,connect_dist:int = 3):
+        # connect leaf nodes if they close enough
+
+        leaf_nodes = [n for n in self.G.nodes if self.G.degree[n] == 1]
+        
+        leaf_positions = np.array([self.G.nodes[n]["pos"] for n in leaf_nodes])
+        all_nodes = list(self.G.nodes)
+        all_poses = np.array([self.G.nodes[n]["pos"] for n in self.G.nodes])
+        leaf_tree = KDTree(all_poses)
+        # find pairs of leaf nodes that are close enough
+        dist, pairs_index = leaf_tree.query(leaf_positions, k=4, distance_upper_bound=connect_dist)
+        # pairs = [(leaf_nodes[i], leaf_nodes[j]) for i, j in pairs_index if j < len(leaf_nodes) and i < len(leaf_nodes)]
+        # pairs = [(all_nodes[i], all_nodes[j]) for i, j in pairs_index if j < len(all_nodes) and i < len(all_nodes)]
+        pairs = []
+        for i, neigh in enumerate(pairs_index):
+            for j in neigh:
+                # ignore “out of bounds” entries (they come back as index=len(all_nodes))
+                # ignore self-pairs and duplicates
+                if j < len(all_nodes) :
+                    u,v = leaf_nodes[i], all_nodes[j]
+                    if u != v:
+                        if self.G.has_edge(u, v):
+                            continue
+                        pairs.append((leaf_nodes[i], all_nodes[j]))
+
+        # connect leaf nodes that are close enough
+        new_leaf_nodes = [n for n in self.G.nodes if self.G.degree[n] == 1]
+        for i, j in pairs:
+            if self.G.has_edge(i, j):
+                continue
+            if i not in new_leaf_nodes and j not in new_leaf_nodes:
+                continue
+            path_length = nx.shortest_path_length(self.G, source=i, target=j)
+            if path_length < 10:
+                continue
+            norm = np.linalg.norm(all_poses[i] - all_poses[j])
+            if norm <= connect_dist:
+                self.G.add_edge(i, j)
+                new_leaf_nodes = [n for n in self.G.nodes if self.G.degree[n] == 1]
+
     def prune_short_branches_and_delete_junctions(self,max_length: int) -> None:
 
 
@@ -286,26 +330,10 @@ class DLOGraph:
         """
 
             
-        
-        # connect leaf nodes if they close enough
-
-        leaf_nodes = [n for n in self.G.nodes if self.G.degree[n] == 1]
-        
-        leaf_positions = np.array([self.G.nodes[n]["pos"] for n in leaf_nodes])
-        all_poses = np.array([self.G.nodes[n]["pos"] for n in self.G.nodes])
-        leaf_tree = KDTree(leaf_positions)
-        # find pairs of leaf nodes that are close enough
-        dist, pairs_index = leaf_tree.query(leaf_positions, k=2, distance_upper_bound=self.max_dist_to_connect_leafs)
-        pairs = [(leaf_nodes[i], leaf_nodes[j]) for i, j in pairs_index if j < len(leaf_nodes) and i < len(leaf_nodes)]
-        
+        # self._prune_short_branches(self.G, min_length=5)
         # connect leaf nodes that are close enough
-        for i, j in pairs:
-            if self.G.has_edge(i, j):
-                continue
-            norm = np.linalg.norm(all_poses[i] - all_poses[j])
-            if norm <= 3:
-                self.G.add_edge(i, j)
-
+        self._connect_leaf_nodes(connect_dist=3)
+        # # prune short branches
         self._prune_short_branches(self.G, max_length)
         leaf_nodes = [n for n in self.G.nodes if self.G.degree[n] == 1]
         
@@ -358,6 +386,8 @@ class DLOGraph:
         nodes = []
         edges = []
         offset = 0
+
+
         leaf_nodes = set()
         for branch in branches:
             L = branch.shape[0]
@@ -502,7 +532,10 @@ class DLOGraph:
         for comb in best_comb:
             if not self.G.has_edge(comb[0], comb[1]) and comb[0] != comb[1]:
                 if comb[0] not in self.ends_leaf_nodes and comb[1] not in self.ends_leaf_nodes:
-                    self.G.add_edge(comb[0], comb[1])
+                    if self.G.degree[comb[0]] == 1 and self.G.degree[comb[1]] == 1:
+                        # print(f"Adding edge between {comb[0]} and {comb[1]}")
+                        # add the edge only if both nodes are leaf nodes
+                        self.G.add_edge(comb[0], comb[1])
         # print("done")
 
     def reconstruct_dlo_2(self):
@@ -515,13 +548,31 @@ class DLOGraph:
         leaf_poses = np.array([self.G.nodes[n]["pos"] for n in leaf_nodes])
         
         # cluster leaf nodes 
-        
+        if len(leaf_poses) < 2:
+            return
         tree = KDTree(leaf_poses)
         # query for clusters
         dists, cluster_labels = tree.query(leaf_poses, k=4,distance_upper_bound=self.max_dist_to_connect_leafs)
-        cluster_labels = [sorted(cluster) for i,cluster in enumerate(cluster_labels) if all(dists[i] < self.max_dist_to_connect_leafs )]
+        dists_sum = np.sum(dists, axis=1)
+        
+        cluster_labels = [sorted(cluster.astype(int).tolist()) for i,cluster in enumerate(cluster_labels) if all(dists[i] < self.max_dist_to_connect_leafs )]
+        dists_dict = {tuple(cluster_labels[i]) : dists_sum[i].astype(float) for i in range(len(cluster_labels))}
         unique = [list(t) for t in set(tuple(lst) for lst in cluster_labels)]
+        
+        # choose the smallest clusters
+        for cluster_1 in unique:
+            for cluster_2 in unique:
+                if cluster_1 == cluster_2:
+                    continue
+                # if there any overlap between the clusters, choose the smaller one
+                if set(cluster_1).intersection(set(cluster_2)):
+                    if dists_dict[tuple(cluster_1)] < dists_dict[tuple(cluster_2)]:
+                        unique.remove(cluster_2)
+                    else:
+                        unique.remove(cluster_1)
+                    break
         leaf_clusters = []
+
         for cluster in unique:
             cluster_nodes = [leaf_nodes[i] for i in cluster]
             leaf_clusters.append(cluster_nodes)
@@ -548,9 +599,9 @@ class DLOGraph:
                 dlo_path = dlo_path[0]
             path_coords = np.array([self.G.nodes[n]["pos"] for n in dlo_path])
         
-            # spl, fitted_points = bspline_fitting.fit_bspline(path_coords,n_points=500,k=5)
+            spl, fitted_points = bspline_fitting.fit_bspline(path_coords,n_points=50,k=3)
 
-            self.full_bsplins.append(path_coords)
+            self.full_bsplines.append(fitted_points)
         # print(f"Fitted B-spline with {len(fitted_points)} points.")
 
     def visualize(self, figsize: Tuple[int, int] = (10, 10), 
