@@ -47,7 +47,7 @@ def get_spline(mask, config):
                     mask=mask,
                     config=config
                     )
-    print(f"Time to load mask: {time.time() - load_time:.3f} seconds")
+    # print(f"Time to load mask: {time.time() - load_time:.3f} seconds")
 
     # Visualize initial graph
     if config['show_initial_graph']:
@@ -69,12 +69,12 @@ def get_spline(mask, config):
     
     start_dlo = time.time()
     graph.reconstruct_dlo_2()
-    print(f"Time to reconstruct DLO: {time.time() - start_dlo:.3f} seconds")
+    # print(f"Time to reconstruct DLO: {time.time() - start_dlo:.3f} seconds")
     if config['show_dlo_graph']:
         graph.visualize(node_size=config['node_size_small'], with_labels=False, title="Graph After DLO Reconstruction",)
     # Fit B-spline to the full graph
     graph.fit_bspline_to_graph()
-    print("Done")
+    # print("Done")
     return graph
 
 
@@ -276,8 +276,10 @@ if __name__ == '__main__':
 
         # Spline fitting parameters
         'spline': {
+            'k': 3,  # B-spline degree
             'smoothing': 20,
-            'max_num_points': 50
+            'n_points': 200,
+            'max_num_points': 50,  # Maximum number of points in the spline
         },
         
         # Visualization settings
@@ -298,7 +300,7 @@ if __name__ == '__main__':
     count = 0
     errors = 0
     error_paths = []
-    folder = 'S3'
+    folder = 'S1'
     wire_count = int(folder[-1])  # Assuming folder is like 'S1', 'S2', etc.
     os.makedirs(f'DATASETS/SBHC/{folder}/spline_preds', exist_ok=True)
     os.makedirs(f'DATASETS/SBHC/{folder}/plot_preds', exist_ok=True)
@@ -318,11 +320,16 @@ if __name__ == '__main__':
                 print(f"Images are already smaller than 128x128, no resizing needed")
 
 
-            print("-----------left-------------\n")
-            start_time = time.time()
+            
+            
             try:
+                start_time = time.time()
+                print(f"--------STARTING PROCESSING IMG_{count}--------")
                 G = get_spline(image, config=config)
+                print(f"--------PROCESSING DONE IMG_{count}--------")
                 total_time += time.time() - start_time
+                count += 1
+
                 # save the path graph as npy file  
                 image = cv2.resize(image, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
                 # compute scale factors
@@ -331,34 +338,33 @@ if __name__ == '__main__':
 
                 # rect_right = cv2.resize(rect_right, (real_W,
                 # plot full_bspline of left and right
-                fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
+                fig, ax1 = plt.subplots(1, 1, figsize=(12, 10))
                 ax1.imshow(image, cmap='gray')
                 for i, bspline_pts in enumerate(G.full_bsplines):
                     bspline_pts_orig = bspline_pts * np.array([scale_x, scale_y]) - np.array([G.padding_size*2, G.padding_size*2])
-                    ax1.plot(bspline_pts_orig[:, 0], bspline_pts_orig[:, 1], label=f'Left Full B-spline {i}')
+                    ax1.plot(bspline_pts_orig[:, 0], bspline_pts_orig[:, 1], label=f'Full B-spline {i}')
                     np.save(f'DATASETS/SBHC/{folder}/spline_preds/{img_path[:-4]}_{i}.npy', bspline_pts)
                     
                 ax1.set_title('Full B-spline')
                 ax1.axis('equal')
                 ax1.legend()
                 if i == wire_count - 1:
-                    plt.savefig(f'DATASETS/SBHC/{folder}/plot_preds/{img_path[:-4]}_left_full_bspline.png')
+                    plt.savefig(f'DATASETS/SBHC/{folder}/plot_preds/{img_path[:-4]}_full_bspline.png')
+                    plt.close(fig)
                 else:
                     # plt.savefig(f'DATASETS/SBHC/{folder}/plot_preds/{img_path[:-4]}_left_full_bspline.png')
                     errors += 1
                     error_paths.append(config['img_path']) 
             except Exception as e:
-                print(f"Error processing left image: {e}")
+                print(f"Error processing image {count}: {e}")
                 errors += 1
                 error_paths.append(config['img_path'])
-                total_time += time.time() - start_time
+                
                 continue
-            
-            print(f"Time to process left image: {time.time() - start_time:.3f} seconds")
-            
-            count += 1
 
 
-    print(f"Average time to process left image: {total_time / count:.3f} seconds and in FPS: {1 / (total_time / count):.3f} FPS with {count} images processed and {errors} errors")
+
+    if count > 0:
+        print(f"Average time to process image: {total_time / count:.3f} seconds and in FPS: {1 / (total_time / count):.3f} FPS with {count} images processed and {errors} errors")
     print(f"Error paths: {error_paths}")
 

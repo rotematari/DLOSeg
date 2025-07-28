@@ -598,8 +598,8 @@ class DLOGraph:
             if dlo_path.ndim > 1:
                 dlo_path = dlo_path[0]
             path_coords = np.array([self.G.nodes[n]["pos"] for n in dlo_path])
-        
-            spl, fitted_points = bspline_fitting.fit_bspline(path_coords,n_points=50,k=3)
+
+            spl, fitted_points = bspline_fitting.fit_bspline(path_coords,n_points=self.config['spline']["n_points"],k=self.config['spline']["k"],)
 
             self.full_bsplines.append(fitted_points)
         # print(f"Fitted B-spline with {len(fitted_points)} points.")

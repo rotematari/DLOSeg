@@ -292,8 +292,9 @@ if __name__ == '__main__':
 
         # Spline fitting parameters
         'spline': {
+            'k': 3,  # B-spline degree
             'smoothing': 20,
-            'max_num_points': 50
+            'n_points': 50
         },
         
         # Visualization settings
@@ -362,7 +363,7 @@ if __name__ == '__main__':
 
     # rect_right = cv2.resize(rect_right, (real_W,
     # plot full_bspline of left and right
-    fig, (ax1, ax2) = plt.subplots(1, 1, figsize=(12, 10))
+    fig, (ax1) = plt.subplots(1, 1, figsize=(12, 10))
     ax1.imshow(rect_left, cmap='gray')
     for i, bspline_pts in enumerate(G_left.full_bsplines):
         bspline_pts_orig = bspline_pts * np.array([scale_x, scale_y]) - np.array([G_left.padding_size*2, G_left.padding_size*2])
