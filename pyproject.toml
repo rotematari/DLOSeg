@@ -8,18 +8,14 @@ requires = [
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "dlo_seg"
+name = "dloseg"
 version = "0.1.0"
 description = "A toolkit for segmentation and analysis of deformable linear objects in robotics"
 readme = "README.md"
-license = { file = "LICENSE" }
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 
 authors = [
-  { name = "Your Name", email = "you@domain.com" }
-]
-maintainers = [
-  { name = "Your Name", email = "you@domain.com" }
+  { name = "Rotem Atari", email = "rotem.atri@gmail.com" }
 ]
 keywords = ["robotics", "DLO", "segmentation", "computer-vision"]
 classifiers = [
@@ -31,6 +27,12 @@ classifiers = [
 
 # All tools—dev, geometry, vision—now live here
 dependencies = [
+  "torch",
+  "torchvision",
+  "groundingdino-py",
+  "torchpack",
+  "onnx",
+  "onnxsim",
   "numpy",
   "scipy",
   "scikit-image",
@@ -65,4 +67,4 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["dlo_seg*"]
+include = ["dloseg*"]

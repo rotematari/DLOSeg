@@ -33,5 +33,5 @@ src/dloseg/__pycache__
 
 pyzed-4.2-cp310-cp310-linux_x86_64.whl
 
-src/zed/record/recordings
+src/dloseg/zed/record/recordings
 dataset*/

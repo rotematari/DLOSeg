@@ -14,11 +14,16 @@ all options. Run from the repo root: `python full_pipe_line.py [--img_path ...]`
 """
 import argparse
 import ast
+import os
+import sys
+
+# Vendored code (MobileSAMv2) is imported as `segmentors.*`, which requires
+# src/ on sys.path — add it explicitly so this script runs standalone.
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import torch
 from PIL import Image
 import cv2
-import os
-import sys
 from torchvision.ops import box_convert
 # from segmentors.MobileSAMv2.mobilesamv2.promt_mobilesamv2 import ObjectAwareModel
 # from segmentors.GroundingDINO.main import IMAGE_PATH
