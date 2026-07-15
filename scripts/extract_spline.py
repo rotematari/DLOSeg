@@ -12,72 +12,66 @@ The 2D pipeline lives in dloseg/graph/pipeline.py; stereo helpers
 Usage: edit the `config` dict in __main__ (mask paths, spline params,
 visualization flags), then run `python scripts/extract_spline.py`.
 """
+
 import os
+import time
+
 import cv2
 import matplotlib.pyplot as plt
-import time
 import numpy as np
 
 from dloseg.graph.pipeline import get_spline
 
 # Repo root (one level up from scripts/) so relative dataset paths work
 # no matter where the script is launched from.
-REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
-if __name__ == '__main__':
-
+if __name__ == "__main__":
     config = {
         # File paths (relative to the repo root)
-        'mask_l_path': os.path.join(REPO_ROOT, 'outputs/seg_data_720_15fps/img_01_right_mask_0.png'),
-        'mask_r_path': os.path.join(REPO_ROOT, 'outputs/seg_data_720_15fps/img_01_left_mask_0.png'),
-        'img_real_path': os.path.join(REPO_ROOT, 'DATASETS/data_720_15fps/img_01.png'),
-        'zed_calib_path': os.path.join(REPO_ROOT, 'src/dloseg/zed/calibration_data/zed_2i_cal_data.yaml'),
-
+        "mask_l_path": os.path.join(
+            REPO_ROOT, "outputs/seg_data_720_15fps/img_01_right_mask_0.png"
+        ),
+        "mask_r_path": os.path.join(REPO_ROOT, "outputs/seg_data_720_15fps/img_01_left_mask_0.png"),
+        "img_real_path": os.path.join(REPO_ROOT, "DATASETS/data_720_15fps/img_01.png"),
+        "zed_calib_path": os.path.join(
+            REPO_ROOT, "src/dloseg/zed/calibration_data/zed_2i_cal_data.yaml"
+        ),
         # ZED calibration settings
-        'zed': {
-            'resolution': '720p'
-        },
-
+        "zed": {"resolution": "720p"},
         # Rectification settings
-        'rectification': {
-            'alpha': 0
-        },
-
+        "rectification": {"alpha": 0},
         # Graph processing parameters
-        'statistic': 'mean',
-        'min_cluster_factor': 1.0,
-        'padding_size': 0,
-        'max_prune_length': 5,
-        'dilate_iterations': 1,  # Number of iterations for dilation
-        'erode_iterations': 1,  # Number of iterations for erosion
-        'max_dist_to_connect_leafs': 60,  # Maximum distance to connect leaf nodes
-        'max_dist_to_connect_nodes': 5,  # Maximum distance to connect internal nodes
-
+        "statistic": "mean",
+        "min_cluster_factor": 1.0,
+        "padding_size": 0,
+        "max_prune_length": 5,
+        "dilate_iterations": 1,  # Number of iterations for dilation
+        "erode_iterations": 1,  # Number of iterations for erosion
+        "max_dist_to_connect_leafs": 60,  # Maximum distance to connect leaf nodes
+        "max_dist_to_connect_nodes": 5,  # Maximum distance to connect internal nodes
         # Spline fitting parameters
-        'spline': {
-            'k': 3,  # B-spline degree
-            'smoothing': 20,
-            'n_points': 500,
-            'max_num_points': 500  # Maximum number of points in the spline
+        "spline": {
+            "k": 3,  # B-spline degree
+            "smoothing": 20,
+            "n_points": 500,
+            "max_num_points": 500,  # Maximum number of points in the spline
         },
-
         # Visualization settings
-        'on_mask': False,  # Whether to draw the mask as background
-        'show_initial_graph': True,
-        'show_pruned_graph': True,
-        'show_spline_graph': True,
-        'show_dlo_graph': True,
-
-        'show_rectification': True,
-        'show_final_plots': False,
-        'node_size_small': 1,
-        'node_size_large': 5,
-        'figure_size': (12, 10),
-
+        "on_mask": False,  # Whether to draw the mask as background
+        "show_initial_graph": True,
+        "show_pruned_graph": True,
+        "show_spline_graph": True,
+        "show_dlo_graph": True,
+        "show_rectification": True,
+        "show_final_plots": False,
+        "node_size_small": 1,
+        "node_size_large": 5,
+        "figure_size": (12, 10),
         # Processing settings
-        'processing': {
-            'process_right_image': False  # Set to True to process right image as well
-        }
+        "processing": {
+            "process_right_image": False  # Set to True to process right image as well
+        },
     }
 
     # For stereo processing (helpers available in dloseg.recon3d.stereo):
@@ -87,13 +81,13 @@ if __name__ == '__main__':
     # rect_left, rect_right = rectify_stereo_pair(img_real_l, img_real_r, zed_calibration, alpha=0)
     # visualize_rectification(img_real_l, img_real_r, rect_left, rect_right)
 
-    rect_left = cv2.imread(config['mask_l_path'], cv2.IMREAD_GRAYSCALE)
+    rect_left = cv2.imread(config["mask_l_path"], cv2.IMREAD_GRAYSCALE)
     if rect_left is None:
         raise FileNotFoundError(f"Could not read mask image: {config['mask_l_path']}")
 
     plt.figure()
-    plt.imshow(rect_left, cmap='gray')
-    plt.title('Rectified Left Image')
+    plt.imshow(rect_left, cmap="gray")
+    plt.title("Rectified Left Image")
     plt.pause(0.1)
 
     # resize image to 256
@@ -118,15 +112,19 @@ if __name__ == '__main__':
 
     # plot full_bsplines over the mask and next to the real image
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 10))
-    ax1.imshow(rect_left, cmap='gray')
+    ax1.imshow(rect_left, cmap="gray")
     for i, bspline_pts in enumerate(G_left.full_bsplines):
-        bspline_pts_orig = bspline_pts * np.array([scale_x, scale_y]) - np.array([G_left.padding_size*2, G_left.padding_size*2])
-        ax1.plot(bspline_pts_orig[:, 0], bspline_pts_orig[:, 1], label=f'B-spline {i}')
-    ax1.axis('off')
+        bspline_pts_orig = bspline_pts * np.array([scale_x, scale_y]) - np.array(
+            [G_left.padding_size * 2, G_left.padding_size * 2]
+        )
+        ax1.plot(bspline_pts_orig[:, 0], bspline_pts_orig[:, 1], label=f"B-spline {i}")
+    ax1.axis("off")
     ax1.legend(loc="upper right", fontsize=18)
 
-    ax2.axis('off')
-    real_image = cv2.imread(os.path.join(REPO_ROOT, 'DATASETS/SBHC/S3/images/img83.jpg'), cv2.IMREAD_COLOR_RGB)
+    ax2.axis("off")
+    real_image = cv2.imread(
+        os.path.join(REPO_ROOT, "DATASETS/SBHC/S3/images/img83.jpg"), cv2.IMREAD_COLOR_RGB
+    )
     ax2.imshow(real_image)
     plt.tight_layout()
     plt.show()

@@ -12,6 +12,7 @@ files to spline_preds/ and overlay plots to plot_preds/ for later evaluation.
 The pipeline itself (`get_spline`) lives in dloseg/graph/pipeline.py. Run:
 `python scripts/benchmark_sbhc.py` (dataset paths are resolved from the repo root).
 """
+
 import os
 import time
 
@@ -21,60 +22,57 @@ from dloseg.graph.pipeline import get_spline
 
 # Repo root (one level up from scripts/) so relative dataset paths work
 # no matter where the script is launched from.
-REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 
-if __name__ == '__main__':
-
+if __name__ == "__main__":
     config = {
         # Graph processing parameters
-        'statistic': 'mean',
-        'min_cluster_factor': 1.0,
-        'padding_size': 0,
-        'max_prune_length': 5,
-        'dilate_iterations': 1,  # Number of iterations for dilation
-        'erode_iterations': 1,  # Number of iterations for erosion
-        'max_dist_to_connect_leafs': 60,  # Maximum distance to connect leaf nodes
-        'max_dist_to_connect_nodes': 5,  # Maximum distance to connect internal nodes
-
+        "statistic": "mean",
+        "min_cluster_factor": 1.0,
+        "padding_size": 0,
+        "max_prune_length": 5,
+        "dilate_iterations": 1,  # Number of iterations for dilation
+        "erode_iterations": 1,  # Number of iterations for erosion
+        "max_dist_to_connect_leafs": 60,  # Maximum distance to connect leaf nodes
+        "max_dist_to_connect_nodes": 5,  # Maximum distance to connect internal nodes
         # Spline fitting parameters
-        'spline': {
-            'k': 3,  # B-spline degree
-            'smoothing': 20,
-            'n_points': 200,
-            'max_num_points': 50,  # Maximum number of points in the spline
+        "spline": {
+            "k": 3,  # B-spline degree
+            "smoothing": 20,
+            "n_points": 200,
+            "max_num_points": 50,  # Maximum number of points in the spline
         },
-
         # Visualization settings
-        'on_mask': False,  # Whether to draw the mask as background
-        'show_initial_graph': False,
-        'show_pruned_graph': False,
-        'show_spline_graph': False,
-        'show_dlo_graph': False,
-        'show_rectification': False,
-        'show_final_plots': False,
-        'node_size_small': 1,
-        'node_size_large': 5,
-        'figure_size': (12, 10),
+        "on_mask": False,  # Whether to draw the mask as background
+        "show_initial_graph": False,
+        "show_pruned_graph": False,
+        "show_spline_graph": False,
+        "show_dlo_graph": False,
+        "show_rectification": False,
+        "show_final_plots": False,
+        "node_size_small": 1,
+        "node_size_large": 5,
+        "figure_size": (12, 10),
     }
 
     total_time = 0
     count = 0
     errors = 0
     error_paths = []
-    for folder in ['S1', 'S2', 'S3']:
-        folder_dir = os.path.join(REPO_ROOT, 'DATASETS/SBHC', folder)
+    for folder in ["S1", "S2", "S3"]:
+        folder_dir = os.path.join(REPO_ROOT, "DATASETS/SBHC", folder)
         wire_count = int(folder[-1])  # S1 -> 1 wire, S2 -> 2 wires, ...
-        os.makedirs(os.path.join(folder_dir, 'spline_preds'), exist_ok=True)
-        os.makedirs(os.path.join(folder_dir, 'plot_preds'), exist_ok=True)
-        for img_path in os.listdir(os.path.join(folder_dir, 'gt_images')):
-            if img_path.endswith('.png'):
-                config['img_path'] = os.path.join(folder_dir, 'gt_images', img_path)
-                image = cv2.imread(config['img_path'], cv2.IMREAD_GRAYSCALE)
+        os.makedirs(os.path.join(folder_dir, "spline_preds"), exist_ok=True)
+        os.makedirs(os.path.join(folder_dir, "plot_preds"), exist_ok=True)
+        for img_path in os.listdir(os.path.join(folder_dir, "gt_images")):
+            if img_path.endswith(".png"):
+                config["img_path"] = os.path.join(folder_dir, "gt_images", img_path)
+                image = cv2.imread(config["img_path"], cv2.IMREAD_GRAYSCALE)
                 if image is None:
                     print(f"Could not read image: {config['img_path']}")
                     errors += 1
-                    error_paths.append(config['img_path'])
+                    error_paths.append(config["img_path"])
                     continue
 
                 orig_h, orig_w = image.shape
@@ -109,9 +107,11 @@ if __name__ == '__main__':
                 except Exception as e:
                     print(f"Error processing image {count}: {e}")
                     errors += 1
-                    error_paths.append(config['img_path'])
+                    error_paths.append(config["img_path"])
                     continue
 
         if count > 0:
-            print(f"Average time to process image: {total_time / count:.3f} seconds and in FPS: {1 / (total_time / count):.3f} FPS with {count} images processed and {errors} errors")
+            print(
+                f"Average time to process image: {total_time / count:.3f} seconds and in FPS: {1 / (total_time / count):.3f} FPS with {count} images processed and {errors} errors"
+            )
         print(f"Error paths: {error_paths}")
