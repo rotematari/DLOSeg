@@ -24,7 +24,7 @@ from dloseg.recon3d.bspline_3d_recon import triangulate_and_reconstruct, visuali
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
-FRAME = 'img_04'
+FRAME = 'img_05'
 
 config = {
     # Graph processing parameters (tuned for 256x256 masks)

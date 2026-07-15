@@ -28,9 +28,9 @@ if __name__ == '__main__':
 
     config = {
         # File paths (relative to the repo root)
-        'mask_l_path': os.path.join(REPO_ROOT, 'outputs/seg_data_720_15fps/img_04_right_mask_0.png'),
-        'mask_r_path': os.path.join(REPO_ROOT, 'outputs/seg_data_720_15fps/img_04_left_mask_0.png'),
-        'img_real_path': os.path.join(REPO_ROOT, 'DATASETS/data_720_15fps/img_04.png'),
+        'mask_l_path': os.path.join(REPO_ROOT, 'outputs/seg_data_720_15fps/img_01_right_mask_0.png'),
+        'mask_r_path': os.path.join(REPO_ROOT, 'outputs/seg_data_720_15fps/img_01_left_mask_0.png'),
+        'img_real_path': os.path.join(REPO_ROOT, 'DATASETS/data_720_15fps/img_01.png'),
         'zed_calib_path': os.path.join(REPO_ROOT, 'src/dloseg/zed/calibration_data/zed_2i_cal_data.yaml'),
 
         # ZED calibration settings

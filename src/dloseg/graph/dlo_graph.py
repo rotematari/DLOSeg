@@ -556,7 +556,29 @@ class DLOGraph:
             angle_sum = _calc_angle_sum(comb[0][0], comb[0][1]) + _calc_angle_sum(comb[1][0], comb[1][1])
             angle_sums[comb] = angle_sum
             # print(f"Combination: {comb}, Angle Sum: {angle_sum}")
-        best_comb = min(angle_sums, key=angle_sums.get)
+
+        # A DLO is an OPEN curve: a correct pairing never closes a cycle.
+        # A cycle-forming pairing detaches part of the wire into a closed
+        # component with no leaf nodes, which fit_bspline_to_graph can never
+        # see. Pick the smallest-angle pairing that keeps the graph acyclic;
+        # fall back to pure angle ranking only if every pairing closes one.
+        def _closes_cycle(pairing):
+            (u1, v1), (u2, v2) = pairing
+            if nx.has_path(self.G, u1, v1):
+                return True
+            self.G.add_edge(u1, v1)
+            try:
+                return nx.has_path(self.G, u2, v2)
+            finally:
+                self.G.remove_edge(u1, v1)
+
+        best_comb = None
+        for comb in sorted(angle_sums, key=angle_sums.get):
+            if not _closes_cycle(comb):
+                best_comb = comb
+                break
+        if best_comb is None:
+            best_comb = min(angle_sums, key=angle_sums.get)
         # print(f"Best Combination: {best_comb}, Angle Sum: {angle_sums[best_comb]}")
         for comb in best_comb:
             if not self.G.has_edge(comb[0], comb[1]) and comb[0] != comb[1]:
@@ -614,16 +636,14 @@ class DLOGraph:
     def fit_bspline_to_graph(self):
         leaf_nodes = [n for n in self.G.nodes if self.G.degree[n] == 1]
         comb = list(combinations(leaf_nodes, 2))
-        ends_pairs = []
-        
+
         for u, v in comb:
             try:
                 dlo_path = np.array(list(nx.shortest_path(self.G, source=u, target=v)))
             except nx.NetworkXNoPath:
-                dlo_path = np.array([])
                 # print(f"No path found between {u} and {v}.")
                 continue
-            
+
             if dlo_path.ndim > 1:
                 dlo_path = dlo_path[0]
             path_coords = np.array([self.G.nodes[n]["pos"] for n in dlo_path])
@@ -631,7 +651,23 @@ class DLOGraph:
             spl, fitted_points = bspline_fitting.fit_bspline(path_coords,n_points=self.config['spline']["n_points"],k=self.config['spline']["k"],)
 
             self.full_bsplines.append(fitted_points)
-        # print(f"Fitted B-spline with {len(fitted_points)} points.")
+
+        # Closed components (no leaf nodes) are invisible to the leaf-pair
+        # loop above. They shouldn't occur for an open DLO — the pairing in
+        # _process_leaf_cluster avoids closing cycles — but if one exists
+        # (e.g. the mask genuinely contains a closed loop), fit it as a
+        # periodic B-spline instead of silently dropping it.
+        for component in nx.connected_components(self.G):
+            sub = self.G.subgraph(component)
+            if any(sub.degree[n] == 1 for n in sub.nodes):
+                continue  # open path — already handled above
+            print(f"Warning: closed component with {len(component)} nodes — fitting periodic B-spline")
+            cycle_nodes = [n for n, _ in nx.find_cycle(sub)]
+            cycle_coords = np.array([self.G.nodes[n]["pos"] for n in cycle_nodes])
+            spl, fitted_points = bspline_fitting.fit_bspline(
+                cycle_coords, n_points=self.config['spline']["n_points"],
+                k=self.config['spline']["k"], periodic=True)
+            self.full_bsplines.append(fitted_points)
 
     def visualize(self, figsize: Tuple[int, int] = (10, 10), 
                 node_size: int = 5, with_labels: bool = False,title: str="") -> None:

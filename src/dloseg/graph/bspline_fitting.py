@@ -102,15 +102,17 @@ def smooth_2d_branch(coords: np.ndarray,
     return out
 
 
-def fit_bspline(points,n_points=100,k=3):
+def fit_bspline(points,n_points=100,k=3,periodic=False):
     """
     Fit a B-spline to 2D data points.
-    
+
     Parameters:
     -----------
     points : ndarray of shape (n, 2)
         The x, y coordinates of the data points to fit
-        
+    periodic : bool
+        Fit a closed (periodic) spline — for closed-loop components.
+
     Returns:
     --------
     tuple: (tck, fitted_points)
@@ -119,7 +121,7 @@ def fit_bspline(points,n_points=100,k=3):
     """
     # Extract x and y coordinates
 
-    spl , u = interpolate.splprep(points.T, k = k,s = len(points)*1e-2)
+    spl , u = interpolate.splprep(points.T, k = k,s = len(points)*1e-2, per = periodic)
     
     # Generate points along the B-spline
     u_fine = np.linspace(0, 1, n_points)
