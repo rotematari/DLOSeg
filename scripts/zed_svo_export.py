@@ -9,19 +9,21 @@ Contains verbose debugging of the retrieved buffer's shape/dtype.
 Edit `svo_input_path`, `output_dir` and `opt["mode"]` at the top before
 running. Requires the pyzed SDK.
 """
-import sys
-import pyzed.sl as sl
-import numpy as np
-import cv2
-from pathlib import Path
+
 import enum
-import argparse
-import os
+import sys
+
+import cv2
+import numpy as np
+import pyzed.sl as sl
+
 
 class AppType(enum.Enum):
     LEFT_AND_RIGHT = 1
     LEFT_AND_DEPTH = 2
     LEFT_AND_DEPTH_16 = 3
+
+
 opt = {}
 opt["input_svo_file"] = "src/dloseg/zed/record/recordings/test.svo2"
 opt["output_path_dir"] = "record/recordings"
@@ -29,15 +31,15 @@ opt["mode"] = 2
 # Get input parameters
 svo_input_path = "src/dloseg/zed/record/recordings/HD2K_SN23135249_17-38-45.svo2"
 output_dir = "record/recordings"
-output_as_video = False    
+output_as_video = False
 app_type = AppType.LEFT_AND_RIGHT
 if opt["mode"] == 1 or opt["mode"] == 3:
     app_type = AppType.LEFT_AND_DEPTH
 if opt["mode"] == 4:
     app_type = AppType.LEFT_AND_DEPTH_16
-    
+
 # Check if exporting to AVI or SEQUENCE
-if opt["mode"] !=0 and opt["mode"] !=1:
+if opt["mode"] != 0 and opt["mode"] != 1:
     output_as_video = False
 
 
@@ -82,7 +84,7 @@ nb_frames = zed.get_svo_number_of_frames()
 
 while True:
     err = zed.grab(rt_param)
-    
+
     if err == sl.ERROR_CODE.SUCCESS:
         svo_position = zed.get_svo_position()
         # Retrieve SVO images
@@ -90,17 +92,23 @@ while True:
         zed.retrieve_image(right_image, sl.VIEW.RIGHT)
 
         # Generate file names
-        filename1 = output_dir +"/"+ ("left%s.png" % str(svo_position).zfill(6))
-        filename2 = output_dir +"/"+ (("right%s.png" if app_type == AppType.LEFT_AND_RIGHT
-                                    else "depth%s.png") % str(svo_position).zfill(6))
-        
+        filename1 = output_dir + "/" + ("left%s.png" % str(svo_position).zfill(6))
+        filename2 = (
+            output_dir
+            + "/"
+            + (
+                ("right%s.png" if app_type == AppType.LEFT_AND_RIGHT else "depth%s.png")
+                % str(svo_position).zfill(6)
+            )
+        )
+
         left_data = left_image.get_data()
         # Correct the dimensions if necessary:
         print("Original shape:", left_data.shape)
         if left_data.shape[0] != height or left_data.shape[1] != width:
             # Try transpose dimensions if they're reversed
             left_data = np.transpose(left_data, (1, 0, 2))
-        
+
         # Check if left_data is a NumPy array
         if not isinstance(left_data, np.ndarray):
             raise TypeError("Input image is not a NumPy array.")
@@ -118,7 +126,7 @@ while True:
             # Convert RGBA to RGB explicitly
             # left_data = np.ascontiguousarray(left_data[:, :, :4], dtype=np.uint8)
             # left_data = cv2.cvtColor(left_data, cv2.COLOR_RGBA2RGB)
-            
+
         else:
             print("left_data is not a numpy array. It's value:", left_data)
             raise ValueError("left_data is not a numpy array")
@@ -126,13 +134,11 @@ while True:
         print("Data type:", type(left_data))
         print("Shape:", left_data.shape)
         print("dtype:", left_data.dtype)
-        print("Contiguous:", left_data.flags['C_CONTIGUOUS'])
+        print("Contiguous:", left_data.flags["C_CONTIGUOUS"])
         # Convert RGBA to RGB explicitly
         left_data_rgb = cv2.cvtColor(left_data, cv2.COLOR_RGBA2RGB)
         cv2.imshow("left_data", left_data_rgb)
         # cv2.imwrite(str(filename1), img=left_data)
-
-
 
         # Save right images
         cv2.imwrite(str(filename2), right_image.get_data())

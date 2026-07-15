@@ -68,3 +68,34 @@ include-package-data = true
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["dloseg*"]
+
+[dependency-groups]
+dev = [
+    "basedpyright>=1.8",
+    "pytest>=8",
+    "ruff>=0.6",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"          # match requires-python >=3.10
+# src/segmentors is vendored third-party (MobileSAMv2/ultralytics/efficientvit);
+# do not lint or reformat it.
+extend-exclude = ["src/segmentors", "**/*.egg-info"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]   # pyflakes, pycodestyle, isort, bugbear, pyupgrade, simplify
+ignore = ["E501"]                 # let the formatter own line length
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# A sourced ROS 2 workspace leaks its pytest plugins onto PYTHONPATH; several
+# fail to import (missing deps) and crash collection. Disable the ROS-origin
+# plugins so the suite runs regardless of the shell environment.
+addopts = "-p no:launch_testing -p no:launch_pytest -p no:launch_ros -p no:ament_copyright -p no:ament_flake8 -p no:ament_pep257 -p no:ament_lint -p no:ament_xmllint"
+
+[tool.basedpyright]
+typeCheckingMode = "standard"     # NOT "recommended"/"all" — too noisy for scientific code
+pythonVersion = "3.10"            # match requires-python >=3.10
+include = ["src", "tests", "scripts"]
+exclude = ["**/__pycache__", "**/.venv", "scratch", "notebooks", "src/segmentors", "**/*.egg-info"]

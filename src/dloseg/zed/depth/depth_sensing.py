@@ -18,18 +18,14 @@
 #
 ########################################################################
 
-import pyzed.sl as sl
-import math
-import numpy as np
-import sys
-import math
-import open3d as o3d
-import matplotlib.pyplot as plt
 
+import numpy as np
+import open3d as o3d
+import pyzed.sl as sl
 
 
 def main():
-    
+
     svo_input_path = "/home/admina/Documents/ZED/HD2K_03.svo2"
     # Create a Camera object
     zed = sl.Camera()
@@ -37,25 +33,25 @@ def main():
     # Create a InitParameters object and set configuration parameters
     init_params = sl.InitParameters()
     init_params.depth_mode = sl.DEPTH_MODE.NEURAL_PLUS  # Use NEURAL_PLUS depth mode
-    init_params.coordinate_units = sl.UNIT.MILLIMETER  # Use millimeter units (for depth measurements)
+    init_params.coordinate_units = (
+        sl.UNIT.MILLIMETER
+    )  # Use millimeter units (for depth measurements)
     init_params.camera_resolution = sl.RESOLUTION.HD2K  # Use HD720 resolution
     # init_params.set_from_svo_file(svo_input_path)
-    
+
     # Open the camera
     status = zed.open(init_params)
-    if status != sl.ERROR_CODE.SUCCESS: #Ensure the camera has opened succesfully
-        print("Camera Open : "+repr(status)+". Exit program.")
+    if status != sl.ERROR_CODE.SUCCESS:  # Ensure the camera has opened succesfully
+        print("Camera Open : " + repr(status) + ". Exit program.")
         exit()
 
     # Create and set RuntimeParameters after opening the camera
     runtime_parameters = sl.RuntimeParameters()
-    
+
     i = 0
     image = sl.Mat()
     depth = sl.Mat()
     point_cloud = sl.Mat()
-
-
 
     while i < 500:
         # A new image is available if grab() returns SUCCESS
@@ -68,32 +64,31 @@ def main():
             zed.retrieve_measure(point_cloud, sl.MEASURE.XYZRGBA)
 
             point_cloud_np = point_cloud.get_data()
-           
-                            
-            pc_mat = point_cloud                             # ← your sl.Mat
-            pc_np  = pc_mat.get_data()                       # (H, W, 4) float32
+
+            pc_mat = point_cloud  # ← your sl.Mat
+            pc_np = pc_mat.get_data()  # (H, W, 4) float32
 
             # keep only finite XYZ rows and flatten to N×3 / N×3 uint8 colour
-            mask   = np.isfinite(pc_np[..., 2])
-            xyz    = pc_np[..., :3][mask]
-            rgba   = pc_np[..., 3][mask].view(np.uint32)
-            rgb8   = np.column_stack(((rgba >>  0) & 255,
-                                    (rgba >>  8) & 255,
-                                    (rgba >> 16) & 255)).astype(np.uint8)
+            mask = np.isfinite(pc_np[..., 2])
+            xyz = pc_np[..., :3][mask]
+            rgba = pc_np[..., 3][mask].view(np.uint32)
+            rgb8 = np.column_stack(
+                ((rgba >> 0) & 255, (rgba >> 8) & 255, (rgba >> 16) & 255)
+            ).astype(np.uint8)
 
-            cloud  = o3d.geometry.PointCloud()
-            cloud.points  = o3d.utility.Vector3dVector(xyz)
-            cloud.colors  = o3d.utility.Vector3dVector(rgb8.astype(np.float32) / 255.0)
+            cloud = o3d.geometry.PointCloud()
+            cloud.points = o3d.utility.Vector3dVector(xyz)
+            cloud.colors = o3d.utility.Vector3dVector(rgb8.astype(np.float32) / 255.0)
 
-            o3d.visualization.draw_geometries([cloud],
-                window_name="ZED point cloud",
-                width=960, height=540)
-            
-            
+            o3d.visualization.draw_geometries(
+                [cloud], window_name="ZED point cloud", width=960, height=540
+            )
+
             print("Point Cloud Shape: ", point_cloud_np.shape)
 
     # Close the camera
     zed.close()
+
 
 if __name__ == "__main__":
     main()

@@ -1,0 +1,298 @@
+{
+    "files": {
+        "./scripts/zed_svo_export.py": [
+            {
+                "code": "reportMissingImports",
+                "range": {
+                    "startColumn": 7,
+                    "endColumn": 15,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./src/dloseg/graph/bspline_fitting.py": [
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 57,
+                    "endColumn": 61,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./src/dloseg/graph/dlo_graph.py": [
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 48,
+                    "endColumn": 52,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 72,
+                    "endColumn": 76,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 19,
+                    "endColumn": 24,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportCallIssue",
+                "range": {
+                    "startColumn": 31,
+                    "endColumn": 41,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 31,
+                    "endColumn": 41,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 43,
+                    "endColumn": 49,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportReturnType",
+                "range": {
+                    "startColumn": 15,
+                    "endColumn": 16,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 34,
+                    "endColumn": 45,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 56,
+                    "endColumn": 70,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportCallIssue",
+                "range": {
+                    "startColumn": 20,
+                    "endColumn": 58,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 43,
+                    "endColumn": 57,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportCallIssue",
+                "range": {
+                    "startColumn": 24,
+                    "endColumn": 59,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 44,
+                    "endColumn": 58,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 40,
+                    "endColumn": 54,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportReturnType",
+                "range": {
+                    "startColumn": 15,
+                    "endColumn": 22,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./src/dloseg/recon3d/bspline_3d_recon.py": [
+            {
+                "code": "reportAssignmentType",
+                "range": {
+                    "startColumn": 8,
+                    "endColumn": 21,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./src/dloseg/zed/camera_streaming/receiver/reciver.py": [
+            {
+                "code": "reportMissingImports",
+                "range": {
+                    "startColumn": 7,
+                    "endColumn": 15,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./src/dloseg/zed/camera_streaming/sender/streaming_sender.py": [
+            {
+                "code": "reportMissingImports",
+                "range": {
+                    "startColumn": 7,
+                    "endColumn": 15,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./src/dloseg/zed/depth/depth_sensing.py": [
+            {
+                "code": "reportMissingImports",
+                "range": {
+                    "startColumn": 7,
+                    "endColumn": 15,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportAttributeAccessIssue",
+                "range": {
+                    "startColumn": 16,
+                    "endColumn": 29,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./src/dloseg/zed/depth/depth_to_point_cloud.py": [
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 52,
+                    "endColumn": 55,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportAttributeAccessIssue",
+                "range": {
+                    "startColumn": 8,
+                    "endColumn": 21,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 40,
+                    "endColumn": 55,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./src/dloseg/zed/depth/stereo_to_point_cloud.py": [
+            {
+                "code": "reportMissingImports",
+                "range": {
+                    "startColumn": 7,
+                    "endColumn": 15,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportAttributeAccessIssue",
+                "range": {
+                    "startColumn": 12,
+                    "endColumn": 25,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportGeneralTypeIssues",
+                "range": {
+                    "startColumn": 36,
+                    "endColumn": 91,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./src/dloseg/zed/record/svo_recording.py": [
+            {
+                "code": "reportMissingImports",
+                "range": {
+                    "startColumn": 7,
+                    "endColumn": 15,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./src/dloseg/zed/zed_images/svo_export.py": [
+            {
+                "code": "reportMissingImports",
+                "range": {
+                    "startColumn": 7,
+                    "endColumn": 15,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportCallIssue",
+                "range": {
+                    "startColumn": 80,
+                    "endColumn": 90,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportAttributeAccessIssue",
+                "range": {
+                    "startColumn": 16,
+                    "endColumn": 34,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 29,
+                    "endColumn": 34,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 21,
+                    "endColumn": 28,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

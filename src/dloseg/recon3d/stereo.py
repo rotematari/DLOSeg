@@ -10,6 +10,7 @@ spline, see recon3d/bspline_3d_recon.py):
 - get_images_from_stereo_pair: load left/right mask images from disk.
 - visualize_rectification:   before/after rectification comparison plot.
 """
+
 import logging
 
 import cv2
@@ -29,7 +30,7 @@ def load_yaml(yaml_path):
         dict: The contents of the YAML file.
     """
     try:
-        with open(yaml_path, 'r') as file:
+        with open(yaml_path) as file:
             data = yaml.safe_load(file)
         return data
     except FileNotFoundError:
@@ -40,8 +41,9 @@ def load_yaml(yaml_path):
         return {}
 
 
-def rectify_stereo_pair(image_left, image_right, calib_data, alpha=0,
-                        interpolation=cv2.INTER_LINEAR, verbose=True):
+def rectify_stereo_pair(
+    image_left, image_right, calib_data, alpha=0, interpolation=cv2.INTER_LINEAR, verbose=True
+):
     """
     Performs stereo rectification on a pair of images.
 
@@ -66,9 +68,9 @@ def rectify_stereo_pair(image_left, image_right, calib_data, alpha=0,
         print("Starting stereo rectification process...")
 
     # Extract calibration parameters
-    K1, D1 = calib_data['K1'], calib_data['D1']
-    K2, D2 = calib_data['K2'], calib_data['D2']
-    R, T = calib_data['R'], calib_data['T']
+    K1, D1 = calib_data["K1"], calib_data["D1"]
+    K2, D2 = calib_data["K2"], calib_data["D2"]
+    R, T = calib_data["R"], calib_data["T"]
 
     # Get image size
     height, width = image_left.shape
@@ -77,15 +79,15 @@ def rectify_stereo_pair(image_left, image_right, calib_data, alpha=0,
     # --- Step 1: Compute Rectification Transforms ---
     # This function computes the rotation matrices (R1, R2), new projection
     # matrices (P1, P2), and a disparity-to-depth mapping matrix (Q).
-    R1, R2, P1, P2, Q, _, _ = cv2.stereoRectify(
-        K1, D1, K2, D2, image_size, R, T, alpha=alpha
-    )
+    R1, R2, P1, P2, Q, _, _ = cv2.stereoRectify(K1, D1, K2, D2, image_size, R, T, alpha=alpha)
 
     if verbose:
         print("\n--- Calculated Rectification Data ---")
         print("New Left Projection Matrix (P1):\n", P1)
         print("\nNew Right Projection Matrix (P2):\n", P2)
-        print("Note: These new P1 and P2 matrices should be used for triangulation with the rectified images.")
+        print(
+            "Note: These new P1 and P2 matrices should be used for triangulation with the rectified images."
+        )
         print("-----------------------------------")
 
     # --- Step 2: Compute Undistortion and Rectification Maps ---
@@ -101,7 +103,7 @@ def rectify_stereo_pair(image_left, image_right, calib_data, alpha=0,
     return rectified_left, rectified_right, P1, P2
 
 
-def get_zed_calibration(zed_calib_path, res='720p'):
+def get_zed_calibration(zed_calib_path, res="720p"):
     """
     Get the ZED calibration parameters for a given resolution.
 
@@ -126,43 +128,30 @@ def get_zed_calibration(zed_calib_path, res='720p'):
     calib = load_yaml(zed_calib_path)
 
     # map common res tags to your YAML suffixes
-    res_map = {
-        '2k':    '2K',
-        '1080p': 'FHD',
-        'fhd':   'FHD',
-        '720p':  'HD',
-        'hd':    'HD',
-        'vga':   'VGA'
-    }
+    res_map = {"2k": "2K", "1080p": "FHD", "fhd": "FHD", "720p": "HD", "hd": "HD", "vga": "VGA"}
     suffix = res_map.get(res.lower(), res)
 
     # pick the matching intrinsics + distortion
-    left  = calib[f'LEFT_CAM_{suffix}']
-    right = calib[f'RIGHT_CAM_{suffix}']
+    left = calib[f"LEFT_CAM_{suffix}"]
+    right = calib[f"RIGHT_CAM_{suffix}"]
 
-    K1 = np.array([
-        [left['fx'],    0.0,        left['cx']],
-        [0.0,           left['fy'], left['cy']],
-        [0.0,           0.0,        1.0       ]
-    ])
-    D1 = np.array([ left['k1'], left['k2'], left['p1'], left['p2'], left['k3'] ])
+    K1 = np.array([[left["fx"], 0.0, left["cx"]], [0.0, left["fy"], left["cy"]], [0.0, 0.0, 1.0]])
+    D1 = np.array([left["k1"], left["k2"], left["p1"], left["p2"], left["k3"]])
 
-    K2 = np.array([
-        [right['fx'],   0.0,         right['cx']],
-        [0.0,           right['fy'], right['cy']],
-        [0.0,           0.0,         1.0        ]
-    ])
-    D2 = np.array([ right['k1'], right['k2'], right['p1'], right['p2'], right['k3'] ])
+    K2 = np.array(
+        [[right["fx"], 0.0, right["cx"]], [0.0, right["fy"], right["cy"]], [0.0, 0.0, 1.0]]
+    )
+    D2 = np.array([right["k1"], right["k2"], right["p1"], right["p2"], right["k3"]])
 
     # stereo extrinsics
-    stereo = calib['STEREO']
+    stereo = calib["STEREO"]
     # baseline in meters (YAML is in mm)
-    baseline = stereo['Baseline'] / 1000.0
-    rx = stereo[f'RX_{suffix}']
-    ry = stereo[f'CV_{suffix}']
-    rz = stereo[f'RZ_{suffix}']
-    ty = stereo['TY']
-    tz = stereo['TZ']
+    baseline = stereo["Baseline"] / 1000.0
+    rx = stereo[f"RX_{suffix}"]
+    ry = stereo[f"CV_{suffix}"]
+    rz = stereo[f"RZ_{suffix}"]
+    ty = stereo["TY"]
+    tz = stereo["TZ"]
 
     # helper: Euler angles (X, Y, Z) -> rotation matrix
     def euler_to_R(rx, ry, rz):
@@ -178,16 +167,20 @@ def get_zed_calibration(zed_calib_path, res='720p'):
     T = np.array([-baseline, ty / 1000.0, tz / 1000.0], dtype=np.float64).reshape(3, 1)
 
     # build projection matrices
-    P1 = K1 @ np.hstack([ np.eye(3), np.zeros((3,1)) ])
-    P2 = K2 @ np.hstack([ R, T ])
+    P1 = K1 @ np.hstack([np.eye(3), np.zeros((3, 1))])
+    P2 = K2 @ np.hstack([R, T])
 
     return {
-        'K1': K1, 'D1': D1,
-        'K2': K2, 'D2': D2,
-        'R': R,   'T': T,
-        'P1': P1, 'P2': P2,
-        'baseline': baseline,
-        'resolution': suffix
+        "K1": K1,
+        "D1": D1,
+        "K2": K2,
+        "D2": D2,
+        "R": R,
+        "T": T,
+        "P1": P1,
+        "P2": P2,
+        "baseline": baseline,
+        "resolution": suffix,
     }
 
 
@@ -212,9 +205,9 @@ def visualize_rectification(raw_left, raw_right, rectified_left, rectified_right
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
 
     ax1.imshow(cv2.cvtColor(raw_combined, cv2.COLOR_BGR2RGB))
-    ax1.set_title('Before Rectification (Raw Images)')
-    ax1.axis('off')
+    ax1.set_title("Before Rectification (Raw Images)")
+    ax1.axis("off")
 
     ax2.imshow(cv2.cvtColor(rectified_combined, cv2.COLOR_BGR2RGB))
-    ax2.set_title('After Rectification (Epipolar lines are horizontal)')
-    ax2.axis('off')
+    ax2.set_title("After Rectification (Epipolar lines are horizontal)")
+    ax2.axis("off")

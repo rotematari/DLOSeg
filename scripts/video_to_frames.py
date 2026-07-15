@@ -4,13 +4,16 @@ Frames are written as frame_000000.<ext>, frame_000001.<ext>, ... into the
 output directory (created if missing). Edit the paths in __main__ and run
 `python scripts/video_to_frames.py`.
 """
-import cv2
+
 import os
 
-def extract_frames(video_path: str, output_dir: str, img_ext: str = 'png'):
+import cv2
+
+
+def extract_frames(video_path: str, output_dir: str, img_ext: str = "png"):
     """
     Extracts all frames from a video file and saves them as images.
-    
+
     Args:
         video_path:   Path to the input video (e.g. 'input.webm')
         output_dir:   Directory where frames will be written.
@@ -19,7 +22,7 @@ def extract_frames(video_path: str, output_dir: str, img_ext: str = 'png'):
     # Open the video file
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        raise IOError(f"Cannot open video: {video_path}")
+        raise OSError(f"Cannot open video: {video_path}")
 
     # Make sure output directory exists
     os.makedirs(output_dir, exist_ok=True)
@@ -38,6 +41,7 @@ def extract_frames(video_path: str, output_dir: str, img_ext: str = 'png'):
     cap.release()
     print(f"Extracted {frame_idx} frames into '{output_dir}'")
 
+
 if __name__ == "__main__":
     # Example usage:
-    extract_frames('/home/admina/Videos/Screencasts/spline_video.webm', 'frames_output')
+    extract_frames("/home/admina/Videos/Screencasts/spline_video.webm", "frames_output")
