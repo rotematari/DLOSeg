@@ -12,7 +12,7 @@ Pipeline (triangulate_and_reconstruct):
 `visualize_reconstruction` shows the 2D inputs, raw 3D point cloud, and the
 final 3D spline. Running the file directly demos the pipeline on mock
 calibration data and synthetic spline points — replace those with real ZED
-calibration (see dloseg/graph/pipeline.py:get_zed_calibration) and the 2D splines
+calibration (see dloseg/recon3d/stereo.py:get_zed_calibration) and the 2D splines
 produced by DLOGraph.
 """
 import numpy as np

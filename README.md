@@ -9,7 +9,7 @@ The core idea: segment the DLO from an image (text-prompted GroundingDINO + Mobi
 ```
 RGB image ──► segmentors (GroundingDINO + MobileSAMv2) ──► binary mask
 binary mask ──► dloseg.graph (skeleton → graph → prune → splines) ──► B-splines per wire
-left/right splines ──► bspline_3d_recon (epipolar matching + triangulation) ──► 3D spline
+left/right splines ──► dloseg.recon3d (epipolar matching + triangulation) ──► 3D spline
 ```
 
 ## Repository layout
@@ -17,10 +17,12 @@ left/right splines ──► bspline_3d_recon (epipolar matching + triangulation
 ```
 src/
   dloseg/                 # the installable Python package
-    graph/                # core pipeline: mask → graph → B-splines
+    graph/                # core 2D pipeline: mask → graph → B-splines
       dlo_graph.py        #   DLOGraph — the central data structure
-      pipeline.py         #   get_spline() + stereo/ZED calibration helpers
+      pipeline.py         #   get_spline() orchestration
       bspline_fitting.py  #   2D spline smoothing/fitting backends
+    recon3d/              # 3D reconstruction work
+      stereo.py           #   ZED calibration parsing + stereo rectification
       bspline_3d_recon.py #   stereo triangulation of 2D splines → 3D spline
     zed/                  # ZED stereo camera tooling
       calibration_data/   #   camera calibration YAML (used by the pipeline)

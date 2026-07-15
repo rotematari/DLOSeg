@@ -6,8 +6,8 @@ mask -> skeleton -> graph -> prune -> per-branch spline fit -> DLO
 reconstruction -> global B-spline fit. The resulting B-splines are rescaled
 back to the original resolution and plotted next to the real RGB image.
 
-Shared pipeline/stereo helpers (get_spline, get_zed_calibration,
-rectify_stereo_pair, ...) live in dloseg/graph/pipeline.py.
+The 2D pipeline lives in dloseg/graph/pipeline.py; stereo helpers
+(get_zed_calibration, rectify_stereo_pair, ...) in dloseg/recon3d/stereo.py.
 
 Usage: edit the `config` dict in __main__ (mask paths, spline params,
 visualization flags), then run `python scripts/extract_spline.py`.
@@ -80,8 +80,8 @@ if __name__ == '__main__':
         }
     }
 
-    # For stereo processing (helpers available in graph.pipeline):
-    # from dloseg.graph.pipeline import get_zed_calibration, get_images_from_stereo_pair, rectify_stereo_pair, visualize_rectification
+    # For stereo processing (helpers available in dloseg.recon3d.stereo):
+    # from dloseg.recon3d.stereo import get_zed_calibration, get_images_from_stereo_pair, rectify_stereo_pair, visualize_rectification
     # zed_calibration = get_zed_calibration(config['zed_calib_path'], config['zed']['resolution'])
     # img_real_l, img_real_r = get_images_from_stereo_pair(config['mask_l_path'], config['mask_r_path'])
     # rect_left, rect_right = rectify_stereo_pair(img_real_l, img_real_r, zed_calibration, alpha=0)

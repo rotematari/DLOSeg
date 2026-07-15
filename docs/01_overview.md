@@ -11,13 +11,13 @@ DLOSeg reconstructs **Deformable Linear Objects** (wires, cables) from images as
                 │  → boxes → MobileSAMv2      │
                 └─────────────────────────────┘
                 ┌─────────────────────────────┐
- binary mask ──►│ dloseg.graph                │────► 2D B-splines (per wire)
+ binary mask ──►│ dloseg.recon3d.             │────► 2D B-splines (per wire)
                 │ skeleton → k-NN graph → MST │
                 │  → prune → smooth → resolve │
                 │  crossings → fit B-splines  │
                 └─────────────────────────────┘
                 ┌─────────────────────────────┐
- left+right ───►│ dloseg.graph.               │────► 3D B-spline
+ left+right ───►│ dloseg.recon3d.             │────► 3D B-spline
  2D splines     │ bspline_3d_recon            │
                 │ epipolar match → triangulate│
                 └─────────────────────────────┘
@@ -34,9 +34,9 @@ Each stage works standalone:
 | Path | What |
 |------|------|
 | `src/dloseg/graph/dlo_graph.py` | `DLOGraph` — the central class |
-| `src/dloseg/graph/pipeline.py` | `get_spline()` orchestration + ZED calibration helpers |
+| `src/dloseg/graph/pipeline.py` | `get_spline()` orchestration of the 2D pipeline |
 | `src/dloseg/graph/bspline_fitting.py` | 2D spline smoothing/fitting backends |
-| `src/dloseg/graph/bspline_3d_recon.py` | stereo triangulation → 3D spline |
+| `src/dloseg/recon3d/` | 3D work: stereo helpers (`stereo.py`) + triangulation (`bspline_3d_recon.py`) |
 | `src/dloseg/zed/` | ZED camera tooling (calibration, depth, streaming, recording) |
 | `src/segmentors/` | vendored MobileSAMv2 + GroundingDINO glue |
 | `scripts/` | runnable entry points ([07](07_scripts.md)) |
