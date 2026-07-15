@@ -40,7 +40,8 @@ def load_yaml(yaml_path):
         return {}
 
 
-def rectify_stereo_pair(image_left, image_right, calib_data, alpha=0):
+def rectify_stereo_pair(image_left, image_right, calib_data, alpha=0,
+                        interpolation=cv2.INTER_LINEAR, verbose=True):
     """
     Performs stereo rectification on a pair of images.
 
@@ -52,12 +53,17 @@ def rectify_stereo_pair(image_left, image_right, calib_data, alpha=0):
         alpha (float): Free scaling parameter. alpha=0 means the rectified images
                        are zoomed in to show only valid pixels. alpha=1 means all
                        source image pixels are retained, possibly with black borders.
+        interpolation: cv2 interpolation flag for the remap. Use
+                       cv2.INTER_NEAREST for binary masks so they stay binary.
+        verbose (bool): Print the computed rectification data.
 
     Returns:
-        tuple: (rectified_left, rectified_right)
-               A tuple of the two rectified images.
+        tuple: (rectified_left, rectified_right, P1, P2)
+               The two rectified images plus the NEW projection matrices to
+               use for triangulation in the rectified frame.
     """
-    print("Starting stereo rectification process...")
+    if verbose:
+        print("Starting stereo rectification process...")
 
     # Extract calibration parameters
     K1, D1 = calib_data['K1'], calib_data['D1']
@@ -69,33 +75,30 @@ def rectify_stereo_pair(image_left, image_right, calib_data, alpha=0):
     image_size = (width, height)
 
     # --- Step 1: Compute Rectification Transforms ---
-    print(f"1. Computing rectification transforms with cv2.stereoRectify (alpha={alpha})...")
     # This function computes the rotation matrices (R1, R2), new projection
     # matrices (P1, P2), and a disparity-to-depth mapping matrix (Q).
     R1, R2, P1, P2, Q, _, _ = cv2.stereoRectify(
         K1, D1, K2, D2, image_size, R, T, alpha=alpha
     )
 
-    print("\n--- Calculated Rectification Data ---")
-    print("New Left Projection Matrix (P1):\n", P1)
-    print("\nNew Right Projection Matrix (P2):\n", P2)
-    print("Note: These new P1 and P2 matrices should be used for triangulation with the rectified images.")
-    print("-----------------------------------")
+    if verbose:
+        print("\n--- Calculated Rectification Data ---")
+        print("New Left Projection Matrix (P1):\n", P1)
+        print("\nNew Right Projection Matrix (P2):\n", P2)
+        print("Note: These new P1 and P2 matrices should be used for triangulation with the rectified images.")
+        print("-----------------------------------")
 
     # --- Step 2: Compute Undistortion and Rectification Maps ---
-    print("\n2. Computing rectification maps with cv2.initUndistortRectifyMap...")
     # This creates a lookup table for where each pixel in the new rectified
     # image comes from in the original distorted image.
     map1_left, map2_left = cv2.initUndistortRectifyMap(K1, D1, R1, P1, image_size, cv2.CV_32FC1)
     map1_right, map2_right = cv2.initUndistortRectifyMap(K2, D2, R2, P2, image_size, cv2.CV_32FC1)
 
     # --- Step 3: Apply the Maps to the Images ---
-    print("3. Applying maps to images with cv2.remap...")
-    rectified_left = cv2.remap(image_left, map1_left, map2_left, interpolation=cv2.INTER_LINEAR)
-    rectified_right = cv2.remap(image_right, map1_right, map2_right, interpolation=cv2.INTER_LINEAR)
+    rectified_left = cv2.remap(image_left, map1_left, map2_left, interpolation=interpolation)
+    rectified_right = cv2.remap(image_right, map1_right, map2_right, interpolation=interpolation)
 
-    print("\nRectification complete.")
-    return rectified_left, rectified_right
+    return rectified_left, rectified_right, P1, P2
 
 
 def get_zed_calibration(zed_calib_path, res='720p'):
@@ -169,7 +172,10 @@ def get_zed_calibration(zed_calib_path, res='720p'):
         return Rz @ Ry @ Rx
 
     R = euler_to_R(rx, ry, rz)
-    T = np.array([baseline, ty, tz], dtype=np.float64).reshape(3, 1)
+    # OpenCV convention: T maps left-camera coords into the right-camera frame,
+    # so a right camera physically at +B along x gives t_x = -B.
+    # TY/TZ are in millimeters in the ZED YAML, like Baseline.
+    T = np.array([-baseline, ty / 1000.0, tz / 1000.0], dtype=np.float64).reshape(3, 1)
 
     # build projection matrices
     P1 = K1 @ np.hstack([ np.eye(3), np.zeros((3,1)) ])

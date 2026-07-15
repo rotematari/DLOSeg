@@ -18,9 +18,71 @@ produced by DLOGraph.
 import numpy as np
 import cv2
 from scipy.interpolate import splprep, splev
-from scipy.optimize import fsolve
+from scipy.optimize import fsolve, brentq
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+
+
+def find_correspondences_arclength(spline_func_left, spline_func_right, tck_right,
+                                   num_samples=100, y_tol=2.0, refine_window=0.05):
+    """
+    Match two B-splines of the SAME wire by normalized arc length, with a local
+    epipolar refinement.
+
+    The global y-search in `find_correspondences` picks the wrong branch on
+    hairpin-shaped wires (many x's share one y). Here we exploit that both
+    splines trace the same physical wire end-to-end: parameter u on the left
+    corresponds to ~u on the right (after orientation alignment), and we only
+    refine u locally so that y_right(u) == y_left (rectified epipolar
+    constraint).
+
+    Args:
+        spline_func_left / spline_func_right: callables u -> (x, y).
+        tck_right: right spline tck, for scalar evaluation during refinement.
+        num_samples: samples along the wire.
+        y_tol (px): reject pairs whose epipolar residual exceeds this.
+        refine_window: half-width of the u-neighborhood searched for the
+            exact epipolar match around the arc-length guess.
+
+    Returns:
+        tuple: (matched_points_left, matched_points_right) as (M, 2) arrays.
+    """
+    u = np.linspace(0, 1, num_samples)
+    left_pts = spline_func_left(u)
+    right_pts = spline_func_right(u)
+
+    # Orientation: the two splines may run in opposite directions along the wire.
+    y_l = left_pts[:, 1]
+    if np.abs(y_l - right_pts[::-1, 1]).sum() < np.abs(y_l - right_pts[:, 1]).sum():
+        u_right_guess = 1.0 - u
+    else:
+        u_right_guess = u
+
+    matched_points_left, matched_points_right = [], []
+    for i, p_left in enumerate(left_pts):
+        y_target = p_left[1]
+        ug = u_right_guess[i]
+
+        def y_error(uu):
+            return splev(uu, tck_right)[1] - y_target
+
+        # Local root solve around the arc-length guess (stay on the same branch)
+        lo, hi = max(0.0, ug - refine_window), min(1.0, ug + refine_window)
+        u_sol = ug
+        try:
+            if y_error(lo) * y_error(hi) < 0:
+                u_sol = brentq(y_error, lo, hi)
+        except ValueError:
+            pass
+
+        if abs(y_error(u_sol)) < y_tol:
+            matched_points_left.append(p_left)
+            matched_points_right.append(np.array(splev(u_sol, tck_right)))
+
+    if not matched_points_left:
+        raise ValueError("Could not find any corresponding points. Check spline overlap and y-coordinates.")
+
+    return np.array(matched_points_left), np.array(matched_points_right)
 
 def get_bspline_function(points_2d):
     """
@@ -85,11 +147,13 @@ def find_correspondences(spline_func_left, spline_func_right, tck_right, num_sam
         initial_guess_idx = np.argmin(np.abs(y_right_samples - y_target))
         
         u_solution, = fsolve(y_error_func, u_guess[initial_guess_idx])
-        
+
         # Check if the solution is within the valid parameter range [0, 1]
-        if 0 <= u_solution <= 1:
+        # and actually satisfies the epipolar constraint (fsolve can return
+        # non-converged extrapolations on hairpin-shaped curves).
+        if 0 <= u_solution <= 1 and abs(y_error_func(u_solution)) < 1.5:
             p_right = np.array(splev(u_solution, tck_right))
-            
+
             matched_points_left.append(p_left)
             matched_points_right.append(p_right)
 
@@ -98,7 +162,8 @@ def find_correspondences(spline_func_left, spline_func_right, tck_right, num_sam
         
     return np.array(matched_points_left), np.array(matched_points_right)
 
-def triangulate_and_reconstruct(calib_data, bspline_left_pts, bspline_right_pts):
+def triangulate_and_reconstruct(calib_data, bspline_left_pts, bspline_right_pts,
+                                z_range=None, matching='arclength'):
     """
     Main pipeline function to perform 3D reconstruction of a B-spline.
 
@@ -106,6 +171,12 @@ def triangulate_and_reconstruct(calib_data, bspline_left_pts, bspline_right_pts)
         calib_data (dict): Dictionary with ZED camera calibration data.
         bspline_left_pts (np.ndarray): (N, 2) array of points for the left B-spline.
         bspline_right_pts (np.ndarray): (M, 2) array of points for the right B-spline.
+        z_range (tuple, optional): (z_min, z_max) in meters — triangulated points
+            outside this depth window are discarded as mismatches before the
+            3D spline fit (e.g. (0.3, 5.0) for a tabletop ZED scene).
+        matching (str): 'arclength' (default — robust for a single wire seen in
+            both views, matches by normalized arc length with local epipolar
+            refinement) or 'epipolar' (global y-search; fails on hairpins).
 
     Returns:
         tuple: (points_3d, spline_3d_func)
@@ -118,8 +189,11 @@ def triangulate_and_reconstruct(calib_data, bspline_left_pts, bspline_right_pts)
     spline_func_right, tck_right = get_bspline_function(bspline_right_pts)
 
     # --- Step 2: Find corresponding points ---
-    print("Step 2: Finding correspondences using epipolar constraint...")
-    points_l, points_r = find_correspondences(spline_func_left, spline_func_right, tck_right)
+    print(f"Step 2: Finding correspondences ({matching})...")
+    if matching == 'arclength':
+        points_l, points_r = find_correspondences_arclength(spline_func_left, spline_func_right, tck_right)
+    else:
+        points_l, points_r = find_correspondences(spline_func_left, spline_func_right, tck_right)
 
     # --- Step 3: Triangulate points ---
     print("Step 3: Triangulating 2D point pairs...")
@@ -135,7 +209,16 @@ def triangulate_and_reconstruct(calib_data, bspline_left_pts, bspline_right_pts)
 
     # Convert from homogeneous to cartesian coordinates
     points_3d = (points_4d_hom[:3, :] / points_4d_hom[3, :]).T
-    
+
+    # Optional: discard depth outliers (bad epipolar matches)
+    if z_range is not None:
+        z_min, z_max = z_range
+        keep = (points_3d[:, 2] >= z_min) & (points_3d[:, 2] <= z_max)
+        n_dropped = int((~keep).sum())
+        if n_dropped:
+            print(f"Dropped {n_dropped}/{len(points_3d)} triangulated points outside Z=[{z_min}, {z_max}] m")
+        points_3d = points_3d[keep]
+
     # --- Step 4: Fit a 3D B-spline to the reconstructed points ---
     print("Step 4: Fitting a smooth 3D B-spline...")
     if len(points_3d) < 4:
@@ -143,7 +226,10 @@ def triangulate_and_reconstruct(calib_data, bspline_left_pts, bspline_right_pts)
          return points_3d, None
 
     points_3d_t = points_3d.T
-    tck_3d, u_3d = splprep([points_3d_t[0], points_3d_t[1], points_3d_t[2]], s=0.1, k=3)
+    # Smoothing budget: allow ~3 mm residual per point (scipy's s is the total
+    # sum of squared residuals) — s=0.1 would allow ~3 cm and shortcut loops.
+    s_3d = len(points_3d) * (0.003 ** 2)
+    tck_3d, u_3d = splprep([points_3d_t[0], points_3d_t[1], points_3d_t[2]], s=s_3d, k=3)
     
     def spline_3d_func(u_interp):
         return np.array(splev(u_interp, tck_3d)).T
@@ -151,8 +237,9 @@ def triangulate_and_reconstruct(calib_data, bspline_left_pts, bspline_right_pts)
     print("Reconstruction complete.")
     return points_3d, spline_3d_func
 
-def visualize_reconstruction(bspline_left_pts, bspline_right_pts, points_3d, spline_3d_func):
-    """Visualizes the entire process."""
+def visualize_reconstruction(bspline_left_pts, bspline_right_pts, points_3d, spline_3d_func,
+                             save_path=None):
+    """Visualizes the entire process. If save_path is given, also save the figure."""
     fig = plt.figure(figsize=(18, 6))
     
     # 2D Splines
@@ -202,6 +289,9 @@ def visualize_reconstruction(bspline_left_pts, bspline_right_pts, points_3d, spl
     ax3.set_zlim(mid_z - max_range, mid_z + max_range)
 
     plt.tight_layout()
+    if save_path is not None:
+        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Saved reconstruction figure to {save_path}")
     plt.show()
 
 # --- Main Execution ---

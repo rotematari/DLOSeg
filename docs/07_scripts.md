@@ -39,6 +39,14 @@ uv run scripts/extract_spline_video.py   # set config['video_path'] first
 
 Dump every frame of a video to `frame_NNNNNN.png` files. Edit the paths in `__main__`.
 
+## `recon3d_demo.py`
+
+End-to-end 3D reconstruction of one captured ZED frame (masks → rectify → 2D splines → triangulate → 3D spline). Saves figures and `points3d.npy` to `outputs/recon3d/`. Set `FRAME` at the top. See [05 — Stereo & 3D](05_stereo_3d.md).
+
+```bash
+MPLBACKEND=Agg uv run scripts/recon3d_demo.py
+```
+
 ## `zed_svo_export.py`
 
 Export frames from a recorded ZED `.svo2` file (left/right or left/depth depending on `mode`). Edit `svo_input_path` / `output_dir` at the top. Requires **pyzed** ([02 — Setup](02_setup.md#-uv-sync-prunes-undeclared-packages)).

@@ -16,25 +16,26 @@ Lift two 2D B-splines (left/right rectified views) to a single 3D B-spline. Code
 ## Reconstruction pipeline (`triangulate_and_reconstruct`)
 
 1. **Fit** parametric B-splines to the left and right 2D point sets (`splprep`, s=0).
-2. **Correspond** via the epipolar constraint: for each sample on the left spline, solve for the right-spline parameter u where `y_right(u) == y_left` (`fsolve`, seeded from a coarse scan).
+2. **Correspond** by normalized **arc length** (default): both splines trace the same wire end-to-end, so u on the left maps to ~u on the right (after orientation alignment); a local root-solve then refines u to satisfy the epipolar constraint `y_right(u) == y_left`. (A global y-search mode, `matching='epipolar'`, exists but mismatches on hairpin-shaped wires.)
 3. **Triangulate** matched pairs with `cv2.triangulatePoints(P1, P2, ...)` → 3D points.
 4. **Fit** a 3D B-spline through the triangulated points (`splprep`, 3D).
 
 `visualize_reconstruction` shows the 2D inputs, the raw 3D cloud, and the final 3D spline side by side.
 
-## Running the demo
+## Running on real data
 
 ```bash
-uv run python src/dloseg/recon3d/bspline_3d_recon.py
+MPLBACKEND=Agg uv run scripts/recon3d_demo.py
 ```
 
-Runs on **mock** calibration + synthetic splines defined in `__main__`. To use real data, replace them with:
-- `calib_data` from `dloseg.recon3d.stereo.get_zed_calibration(...)`,
-- 2D splines from `DLOGraph.full_bsplines` computed on the left/right masks (e.g. `outputs/seg_data_720_15fps/img_XX_{left,right}_mask_0.png`).
+End-to-end on a captured ZED frame: loads the left/right masks from `outputs/seg_data_720_15fps/`, rectifies with the factory calibration, extracts 2D splines, triangulates, and saves figures + `points3d.npy` to `outputs/recon3d/`. Verified on `img_04`: 99 points, Z ∈ [1.06, 1.16] m.
+
+`uv run python src/dloseg/recon3d/bspline_3d_recon.py` still runs the synthetic mock demo.
 
 ## Known limitations
 
-- The epipolar y-match assumes each spline is **monotonic enough in y** that one y maps to one u; hairpin-shaped wires (multiple points at the same height) can match the wrong branch — noted as a simplification in `find_correspondences`.
+- Arc-length matching assumes both views see the **whole wire** (heavy occlusion of one end in one view shifts the parameterization). `z_range` filtering in `triangulate_and_reconstruct` drops residual mismatches.
+- `get_zed_calibration` follows the OpenCV convention (T maps left→right frame, `t_x = -baseline`); ZED YAML Baseline/TY/TZ are in millimeters.
 - Wire identity across views is assumed (spline i on the left ↔ spline i on the right); with multiple wires you must match them first (e.g. by endpoint epipolar consistency).
 
 ## Related ZED tooling (`src/dloseg/zed/`)
