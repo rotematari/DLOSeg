@@ -8,8 +8,8 @@ import warnings
 import torch.utils.data
 from torch.utils.data.distributed import DistributedSampler
 
-from efficientvit.apps.data_provider.random_resolution import RRSController
-from efficientvit.models.utils import val2tuple
+from segmentors.MobileSAMv2.efficientvit.apps.data_provider.random_resolution import RRSController
+from segmentors.MobileSAMv2.efficientvit.models.utils import val2tuple
 
 __all__ = ["parse_image_size", "random_drop_data", "DataProvider"]
 

@@ -1,3 +1,18 @@
+"""Batch DLO spline extraction over the full SBHC dataset.
+
+Iterates over every ground-truth mask in DATASETS/SBHC/{S1,S2,S3}/gt_images,
+resizes each to 256x256, and runs the DLOGraph pipeline
+(mask -> skeleton -> graph -> prune -> spline fit -> DLO reconstruction ->
+B-spline fit) on each image. Reports average per-image processing time / FPS
+and collects the paths of images that failed.
+
+The (commented-out) saving block can dump per-wire spline predictions as .npy
+files to spline_preds/ and overlay plots to plot_preds/ for later evaluation.
+
+Shares its `get_spline` pipeline and stereo/ZED helpers with graph/main.py
+(duplicated copy — see that file). Run: `python main_full_ds.py` from the
+repo root so the relative DATASETS/ paths resolve.
+"""
 import cv2
 import matplotlib.pyplot as plt
 import time
@@ -304,67 +319,68 @@ if __name__ == '__main__':
     wire_count = int(folder[-1])  # Assuming folder is like 'S1', 'S2', etc.
     os.makedirs(f'DATASETS/SBHC/{folder}/spline_preds', exist_ok=True)
     os.makedirs(f'DATASETS/SBHC/{folder}/plot_preds', exist_ok=True)
-    for img_path in os.listdir(f'DATASETS/SBHC/{folder}/gt_images'):
-        if img_path.endswith('.png'):
-            config['img_path'] = os.path.join(f'DATASETS/SBHC/{folder}/gt_images', img_path)
-            print(f"Processing image: {config['img_path']}")
-            image = cv2.imread(config['img_path'], cv2.IMREAD_GRAYSCALE)
-            # image = cv2.threshold(image, 30, 255, cv2.THRESH_BINARY)[1]
+    for folder in ['S1', 'S2', 'S3']:
+        for img_path in os.listdir(f'DATASETS/SBHC/{folder}/gt_images'):
+            if img_path.endswith('.png'):
+                config['img_path'] = os.path.join(f'DATASETS/SBHC/{folder}/gt_images', img_path)
+                # print(f"Processing image: {config['img_path']}")
+                image = cv2.imread(config['img_path'], cv2.IMREAD_GRAYSCALE)
+                # image = cv2.threshold(image, 30, 255, cv2.THRESH_BINARY)[1]
 
-            orig_h, orig_w = image.shape
-            new_h, new_w = 256, 256
-            if orig_h > 256 or orig_w > 256:
-                print(f"Resizing images from {orig_h}x{orig_w} to 256x256")
-                image = cv2.resize(image, (new_h, new_w), interpolation=cv2.INTER_LINEAR)
-            else:
-                print(f"Images are already smaller than 128x128, no resizing needed")
-
-
-            
-            
-            try:
-                start_time = time.time()
-                print(f"--------STARTING PROCESSING IMG_{count}--------")
-                G = get_spline(image, config=config)
-                print(f"--------PROCESSING DONE IMG_{count}--------")
-                total_time += time.time() - start_time
-                count += 1
-
-                # save the path graph as npy file  
-                image = cv2.resize(image, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
-                # compute scale factors
-                scale_x = orig_w / new_w
-                scale_y = orig_h / new_h
-
-                # rect_right = cv2.resize(rect_right, (real_W,
-                # plot full_bspline of left and right
-                fig, ax1 = plt.subplots(1, 1, figsize=(12, 10))
-                ax1.imshow(image, cmap='gray')
-                for i, bspline_pts in enumerate(G.full_bsplines):
-                    bspline_pts_orig = bspline_pts * np.array([scale_x, scale_y]) - np.array([G.padding_size*2, G.padding_size*2])
-                    ax1.plot(bspline_pts_orig[:, 0], bspline_pts_orig[:, 1], label=f'Full B-spline {i}')
-                    np.save(f'DATASETS/SBHC/{folder}/spline_preds/{img_path[:-4]}_{i}.npy', bspline_pts)
-                    
-                ax1.set_title('Full B-spline')
-                ax1.axis('equal')
-                ax1.legend()
-                if i == wire_count - 1:
-                    plt.savefig(f'DATASETS/SBHC/{folder}/plot_preds/{img_path[:-4]}_full_bspline.png')
-                    plt.close(fig)
+                orig_h, orig_w = image.shape
+                new_h, new_w = 256, 256
+                if orig_h > 256 or orig_w > 256:
+                    # print(f"Resizing images from {orig_h}x{orig_w} to 256x256")
+                    image = cv2.resize(image, (new_h, new_w), interpolation=cv2.INTER_LINEAR)
                 else:
-                    # plt.savefig(f'DATASETS/SBHC/{folder}/plot_preds/{img_path[:-4]}_left_full_bspline.png')
-                    errors += 1
-                    error_paths.append(config['img_path']) 
-            except Exception as e:
-                print(f"Error processing image {count}: {e}")
-                errors += 1
-                error_paths.append(config['img_path'])
+                    print(f"Images are already smaller than 128x128, no resizing needed")
+
+
                 
-                continue
+                
+                try:
+                    start_time = time.time()
+                    # print(f"--------STARTING PROCESSING IMG_{count}--------")
+                    G = get_spline(image, config=config)
+                    # print(f"--------PROCESSING DONE IMG_{count}--------")
+                    total_time += time.time() - start_time
+                    count += 1
+
+                    # save the path graph as npy file  
+                    image = cv2.resize(image, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
+                    # compute scale factors
+                    scale_x = orig_w / new_w
+                    scale_y = orig_h / new_h
+
+                    # rect_right = cv2.resize(rect_right, (real_W,
+                    # plot full_bspline of left and right
+                    # fig, ax1 = plt.subplots(1, 1, figsize=(12, 10))
+                    # ax1.imshow(image, cmap='gray')
+                    # for i, bspline_pts in enumerate(G.full_bsplines):
+                    #     bspline_pts_orig = bspline_pts * np.array([scale_x, scale_y]) - np.array([G.padding_size*2, G.padding_size*2])
+                    #     ax1.plot(bspline_pts_orig[:, 0], bspline_pts_orig[:, 1], label=f'Full B-spline {i}')
+                    #     np.save(f'DATASETS/SBHC/{folder}/spline_preds/{img_path[:-4]}_{i}.npy', bspline_pts)
+                        
+                    # ax1.set_title('Full B-spline')
+                    # ax1.axis('equal')
+                    # ax1.legend()
+                    # if i == wire_count - 1:
+                    #     plt.savefig(f'DATASETS/SBHC/{folder}/plot_preds/{img_path[:-4]}_full_bspline.png')
+                    #     plt.close(fig)
+                    # else:
+                    #     # plt.savefig(f'DATASETS/SBHC/{folder}/plot_preds/{img_path[:-4]}_left_full_bspline.png')
+                    #     errors += 1
+                    #     error_paths.append(config['img_path']) 
+                except Exception as e:
+                    print(f"Error processing image {count}: {e}")
+                    errors += 1
+                    error_paths.append(config['img_path'])
+                    
+                    continue
 
 
 
-    if count > 0:
-        print(f"Average time to process image: {total_time / count:.3f} seconds and in FPS: {1 / (total_time / count):.3f} FPS with {count} images processed and {errors} errors")
-    print(f"Error paths: {error_paths}")
+        if count > 0:
+            print(f"Average time to process image: {total_time / count:.3f} seconds and in FPS: {1 / (total_time / count):.3f} FPS with {count} images processed and {errors} errors")
+        print(f"Error paths: {error_paths}")
 

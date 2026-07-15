@@ -1,3 +1,16 @@
+"""Evaluation / test-set visualization for the RGB -> heatmap model.
+
+ModelEvaluator.test computes MSE loss over a test loader and saves
+visualizations for the first few batches, supporting both model output
+types configured via config['model_output_type']:
+- 'heatmaps':    peak/centroid extraction per channel, predicted vs
+  ground-truth keypoints overlaid on the input mask.
+- 'coordinates': normalized (num_pts, 2) spline coordinates denormalized to
+  pixel space and drawn as predicted vs ground-truth polylines.
+
+Note: the heatmap path imports batch_centroids_torch from
+spline_from_mask.utils, which must be on the PYTHONPATH.
+"""
 import torch.nn as nn
 import matplotlib.pyplot as plt
 import os

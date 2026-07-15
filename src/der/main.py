@@ -1,3 +1,26 @@
+"""Work-in-progress reimplementation of DEFORM (differentiable DER).
+
+Torch building blocks for "Differentiable Discrete Elastic Rods for
+Real-Time Modeling of Deformable Linear Objects":
+  https://github.com/roahmlab/DEFORM
+  https://arxiv.org/abs/2406.05931
+
+Implemented: batched edge/length computation, discrete curvature binormal
+(DER eq. 1), material curvature (eq. 2), quaternion utilities, and
+quaternion-based Bishop-frame propagation (computeBishopFrame).
+Stubs remaining: rest configuration, initial state, boundary conditions and
+the main() one-step prediction loop, which follows Algorithm 1 of the paper:
+
+  Inputs: X_t, V_t, u_t
+  1: theta*_t(X_t) = argmin_theta P(X_t, theta_t, alpha)      (Sec. 4.1)
+  2: V_{t+1} = V_t - dt * M^-1 * dP/dX_t
+  3: X_{t+1} = X_t + dt * V_{t+1} + DNN                       (Sec. 4.2)
+  4: Inextensibility enforcement on X_{t+1}                   (Sec. 4.3)
+  5: V_{t+1} = (X_{t+1} - X_t) / dt
+
+See also der/der_util.py (NumPy DER reference) and
+der/dlo_simulator_python.py (runnable PBD-style simulator).
+"""
 from der.utils import *
 import matplotlib.pyplot as plt
 import cv2
@@ -5,22 +28,6 @@ import numpy as np
 
 import torch.nn.functional as F
 import torch
-"""
-this code is an implementation for the 
-Differentiable Discrete Elastic Rods for Real-Time Modeling of Deformable Linear Objects
-from the paper: 
-https://github.com/roahmlab/DEFORM
-https://arxiv.org/abs/2406.05931
-
-Algorithm 1 One Step Prediction with DEFORM
-Inputs: ˆ Xt, ˆ Vt, ut 
-1: θ∗ t(Xt) = argminθt P(Xt,θt,α) ▷ Section.4.1 
-2: ˆ Vt+1 = ˆ Vt −∆tM−1∂P(Xt,θ∗ t(Xt,α),α) ∂Xt 
-3: ˆ Xt+1 = ˆ Xt +∆t ˆ Vt+1 +DNN ▷ (3) ▷ Section.4.2 
-4: Inextensibility Enforcement on ˆ Xt+1 ▷ Section.4.3 
-5: ˆ Vt+1 = (ˆ Xt+1 − ˆ Xt)/∆t ▷ Velocity Update return ˆ Xt+1, ˆ Vt+1
-
-"""
 def get_bishop_frame():
     
     """

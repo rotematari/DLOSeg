@@ -11,12 +11,12 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
 
-from key_point_from_mask import models
+from rgb_to_graph import models
 import numpy as np
 import matplotlib.pyplot as plt
 
-from key_point_from_mask.eval import ModelEvaluator
-from key_point_from_mask.train import ModelTrainer
+
+from rgb_to_graph.train import ModelTrainer
 
 
 def setup_directories(config: Dict[str, Any]) -> None:
@@ -38,20 +38,11 @@ def set_seed(seed: int) -> None:
 
 def create_data_loaders(config: Dict[str, Any]) -> Tuple[DataLoader, DataLoader]:
     """Create train and validation data loaders."""
-    from spline_dataset.datasets import SplineEndPointDatasetHM
+    from rgb_to_graph.datasets.datasets import RgbToMaskDataset
 
-    dataset = SplineEndPointDatasetHM(root=config['dataset_dir'], normalize=True)
+    dataset = RgbToMaskDataset(root_dir=config['dataset_dir'])
     print(f"Dataset loaded: {len(dataset)} samples")
-    print(f"Image size: {dataset.img_size}")
-    print(f"Number of points per spline: {dataset.num_pts}")
-    
-    # Update config with dataset properties
-    config['num_pts'] = dataset[0][1].shape[0]  # Number of points per spline
-    config['img_size'] = dataset.img_size
-    # Set num_classes based on number of spline endpoints (typically 2 for start/end points)
-    
 
-    print(f"Config updated - num_pts: {config['num_pts']}, img_size: {config['img_size']}, num_classes: {config['num_classes']}")
     
     val_size = int(config['val_size'] * len(dataset))
     train_size = len(dataset) - val_size
@@ -125,7 +116,7 @@ def main(config: Dict[str, Any]) -> None:
     
     # Initialize model
     # model = models.EncoderHeatmapHead(config).to(device)
-    model = models.EncoderEdgePointsHM(config=config).to(device)
+    model = models.DloSegFormer(config=config).to(device)
     print(f"Model initialized with {sum(p.numel() for p in model.parameters())} parameters")
     
     # Training
@@ -133,23 +124,20 @@ def main(config: Dict[str, Any]) -> None:
     train_losses, val_losses = trainer.train(train_loader, val_loader)
     
     # Plot training curves
-    plot_training_curves(train_losses, val_losses, config['results_dir'])
+    # plot_training_curves(train_losses, val_losses, config['results_dir'])
     
-    # # Testing
-    # evaluator = ModelEvaluator(model, config)
-    # test_loss = evaluator.test(val_loader)
     
     print("Training completed successfully!")
     return model, train_losses, val_losses
 
 if __name__ == "__main__":
     # define paths
-    DATASET_DIR_PATH = "src/spline_dataset/ds_256_1000_100pts_5-15ctrl_k5_s10_dim2_Nm20"
+    DATASET_DIR_PATH = "DATASETS/SBHC"
     assert os.path.exists(DATASET_DIR_PATH), f"Dataset path {DATASET_DIR_PATH} does not exist."
-    RESULTS_DIR_PATH = "src/key_point_from_mask/results"
+    RESULTS_DIR_PATH = "src/rgb_to_graph/results"
     if not os.path.exists(RESULTS_DIR_PATH):
         os.makedirs(RESULTS_DIR_PATH)
-    CHECK_POINTS_DIR_PATH = "src/key_point_from_mask/checkpoints"
+    CHECK_POINTS_DIR_PATH = "src/rgb_to_graph/checkpoints"
     if not os.path.exists(CHECK_POINTS_DIR_PATH):
         os.makedirs(CHECK_POINTS_DIR_PATH)
         
@@ -168,7 +156,7 @@ if __name__ == "__main__":
         'img_size': (256, 256),  # Will be updated from dataset
         
         # Training parameters
-        'epochs': 10,
+        'epochs': 30,
         'lr': 1e-4,
         'min_lr': 1e-5,  # Minimum learning rate for the scheduler
         'criterion': nn.MSELoss(),  # or any other loss function

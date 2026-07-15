@@ -11,10 +11,10 @@ import torch.distributed
 import torch.nn as nn
 from torchpack import distributed as dist
 
-from efficientvit.apps.data_provider import DataProvider
-from efficientvit.apps.trainer.run_config import RunConfig
-from efficientvit.apps.utils import dump_config, init_modules, load_config, partial_update_config, zero_last_gamma
-from efficientvit.models.utils import build_kwargs_from_config, load_state_dict_from_file
+from segmentors.MobileSAMv2.efficientvit.apps.data_provider import DataProvider
+from segmentors.MobileSAMv2.efficientvit.apps.trainer.run_config import RunConfig
+from segmentors.MobileSAMv2.efficientvit.apps.utils import dump_config, init_modules, load_config, partial_update_config, zero_last_gamma
+from segmentors.MobileSAMv2.efficientvit.models.utils import build_kwargs_from_config, load_state_dict_from_file
 
 __all__ = [
     "save_exp_config",

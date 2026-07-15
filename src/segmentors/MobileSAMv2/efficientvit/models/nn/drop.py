@@ -8,7 +8,7 @@ import torch.nn as nn
 
 from segmentors.MobileSAMv2.efficientvit.apps.trainer.run_config import Scheduler
 from segmentors.MobileSAMv2.efficientvit.models.nn.ops import IdentityLayer, ResidualBlock
-from efficientvit.models.utils import build_kwargs_from_config
+from segmentors.MobileSAMv2.efficientvit.models.utils import build_kwargs_from_config
 
 __all__ = ["apply_drop_func"]
 

@@ -8,11 +8,11 @@ import torch
 import torch.nn as nn
 import torchpack.distributed as dist
 
-from efficientvit.apps.data_provider import DataProvider, parse_image_size
-from efficientvit.apps.trainer.run_config import RunConfig
-from efficientvit.apps.utils import EMA
-from efficientvit.models.nn.norm import reset_bn
-from efficientvit.models.utils import is_parallel, load_state_dict_from_file
+from segmentors.MobileSAMv2.efficientvit.apps.data_provider import DataProvider, parse_image_size
+from segmentors.MobileSAMv2.efficientvit.apps.trainer.run_config import RunConfig
+from segmentors.MobileSAMv2.efficientvit.apps.utils import EMA
+from segmentors.MobileSAMv2.efficientvit.models.nn.norm import reset_bn
+from segmentors.MobileSAMv2.efficientvit.models.utils import is_parallel, load_state_dict_from_file
 
 __all__ = ["Trainer"]
 

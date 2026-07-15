@@ -40,7 +40,6 @@ dependencies = [
   "scikit-learn",
   "networkx",
   "matplotlib",
-  "python3-tk",
   "tqdm",
   "hydra-core",
   "iopath",

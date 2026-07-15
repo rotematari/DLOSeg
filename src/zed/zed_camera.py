@@ -1,3 +1,18 @@
+"""ZED stereo camera wrapper with live segmentation and 3D visualization.
+
+ZedCamera manages a ZED camera via the pyzed SDK: open/close, single-frame
+grab (RGB + depth + XYZRGBA point cloud), threaded streaming, and saving
+point clouds (.ply) / depth maps (.png).
+
+Each visualized frame is passed through a text-prompted segmentation stack
+(GroundingDINO boxes -> SAM2 masks, provided by graph_3d.segmentor.Segmentor)
+and the best mask is shown and optionally applied to the Open3D point-cloud
+view, which has keyboard-controlled view presets (1-4, C).
+
+Running the file directly builds a Segmentor with the "cable." prompt and
+streams the segmented feed live. Requires a physical ZED camera, the pyzed
+SDK, and the Grounded_SAM_2 checkpoints at the configured paths.
+"""
 import pyzed.sl as sl
 import numpy as np
 import cv2

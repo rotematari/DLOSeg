@@ -1,3 +1,9 @@
+"""Utility: dump every frame of a video file to numbered image files.
+
+Frames are written as frame_000000.<ext>, frame_000001.<ext>, ... into the
+output directory (created if missing). Edit the paths in __main__ and run
+`python video_to_image.py`.
+"""
 import cv2
 import os
 

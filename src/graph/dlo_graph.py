@@ -1,3 +1,27 @@
+"""Core DLOGraph class: binary mask -> topological graph -> B-spline DLO model.
+
+The central data structure of the graph pipeline. Given a binary segmentation
+mask of one or more Deformable Linear Objects (wires/cables), DLOGraph:
+
+1. load_from_mask:      pad, dilate/erode, thin (Guo-Hall), and build a k-NN
+                        graph over skeleton pixels, reduced to an MST.
+2. prune_short_branches_and_delete_junctions:
+                        connect nearby leaf nodes, prune short dead-end
+                        branches, remove junction (degree>2) nodes so only
+                        simple paths remain.
+3. fit_spline_to_branches: smooth each remaining branch with a parametric
+                        B-spline (bspline_fitting.smooth_2d_branch_splprep)
+                        and rebuild the graph from the smoothed points.
+4. reconstruct_dlo_2:   cluster the branch endpoints created by junction
+                        removal and reconnect the pairs whose tangent
+                        continuity (minimal total turning angle) is best —
+                        this resolves wire crossings.
+5. fit_bspline_to_graph: fit a final B-spline along each leaf-to-leaf path;
+                        results are stored in `self.full_bsplines`.
+
+Also provides `visualize`/`visualize_on_mask` matplotlib helpers.
+Used by graph/main.py, graph/main_full_ds.py and graph/main_video.py.
+"""
 import numpy as np
 import networkx as nx
 import cv2
