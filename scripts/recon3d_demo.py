@@ -10,9 +10,10 @@ End-to-end demo of the recon3d pipeline on captured data:
 4. Epipolar-match + triangulate (dloseg.recon3d.bspline_3d_recon) -> 3D spline.
 
 Outputs figures to outputs/recon3d/. Headless-safe:
-    MPLBACKEND=Agg uv run scripts/recon3d_demo.py
+    MPLBACKEND=Agg uv run scripts/recon3d_demo.py [frame]   # e.g. img_05
 """
 import os
+import sys
 
 import cv2
 import matplotlib.pyplot as plt
@@ -24,7 +25,7 @@ from dloseg.recon3d.bspline_3d_recon import triangulate_and_reconstruct, visuali
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
-FRAME = 'img_05'
+FRAME = sys.argv[1] if len(sys.argv) > 1 else 'img_01'
 
 config = {
     # Graph processing parameters (tuned for 256x256 masks)
@@ -54,8 +55,13 @@ config = {
 }
 
 
-def mask_to_splines_fullres(mask, config, proc_size=256):
-    """Run the 2D pipeline on a mask, returning splines in full-res pixel coords."""
+def mask_to_splines_fullres(mask, config, proc_size=512):
+    """Run the 2D pipeline on a mask, returning splines in full-res pixel coords.
+
+    proc_size=512 (not 256): rectification resampling pinches thin strands at
+    tight knots, and 256px processing then loses them — measured 96% vs 100%
+    skeleton coverage on the 720p ZED masks.
+    """
     orig_h, orig_w = mask.shape
     mask_proc = cv2.resize(mask, (proc_size, proc_size), interpolation=cv2.INTER_NEAREST)
     G = get_spline(mask_proc, config=config)

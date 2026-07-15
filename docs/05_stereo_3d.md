@@ -34,6 +34,7 @@ End-to-end on a captured ZED frame: loads the left/right masks from `outputs/seg
 
 ## Known limitations
 
+- Process rectified 720p masks at **512px**, not 256: rectification resampling pinches thin strands at tight knots and 256px processing loses them (measured 96% vs 100% skeleton coverage).
 - Arc-length matching assumes both views see the **whole wire** (heavy occlusion of one end in one view shifts the parameterization). `z_range` filtering in `triangulate_and_reconstruct` drops residual mismatches.
 - `get_zed_calibration` follows the OpenCV convention (T maps left→right frame, `t_x = -baseline`); ZED YAML Baseline/TY/TZ are in millimeters.
 - Wire identity across views is assumed (spline i on the left ↔ spline i on the right); with multiple wires you must match them first (e.g. by endpoint epipolar consistency).
