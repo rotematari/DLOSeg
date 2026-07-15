@@ -10,7 +10,8 @@ End-to-end demo of the recon3d pipeline on captured data:
 4. Epipolar-match + triangulate (dloseg.recon3d.bspline_3d_recon) -> 3D spline.
 
 Outputs figures to outputs/recon3d/. Headless-safe:
-    MPLBACKEND=Agg uv run scripts/recon3d_demo.py [frame]   # e.g. img_05
+    MPLBACKEND=Agg uv run scripts/recon3d_demo.py [frame] [smoothing_mm]
+    # e.g.: ... recon3d_demo.py img_05 5    (5 mm 3D smoothing)
 """
 import os
 import sys
@@ -27,6 +28,12 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
 FRAME = sys.argv[1] if len(sys.argv) > 1 else 'img_01'
 
+# Smoothing knobs — tune these two:
+SMOOTHING_3D_MM = float(sys.argv[2]) if len(sys.argv) > 2 else 3.0
+# allowed RMS residual per point of the final 3D spline, in millimeters.
+# Smaller follows the triangulated points tighter (and their noise); larger
+# gives a smoother rod.
+
 config = {
     # Graph processing parameters (tuned for 256x256 masks)
     'padding_size': 0,
@@ -39,7 +46,8 @@ config = {
     # Spline fitting parameters
     'spline': {
         'k': 3,
-        'smoothing': 20,
+        'smoothing': 20,          # branch smoothing during graph cleanup (splprep s)
+        'final_smoothing': None,  # final 2D fit: RMS px per point (None = ~0.1 px, tight)
         'n_points': 200,
         'max_num_points': 100,
     },
@@ -119,6 +127,7 @@ if __name__ == '__main__':
     points_3d, spline_3d_func = triangulate_and_reconstruct(
         calib_rect, left_pts, right_pts,
         z_range=(0.3, 5.0),  # plausible tabletop depth window for the ZED
+        smoothing_mm=SMOOTHING_3D_MM,
     )
 
     z = points_3d[:, 2]

@@ -648,7 +648,10 @@ class DLOGraph:
                 dlo_path = dlo_path[0]
             path_coords = np.array([self.G.nodes[n]["pos"] for n in dlo_path])
 
-            spl, fitted_points = bspline_fitting.fit_bspline(path_coords,n_points=self.config['spline']["n_points"],k=self.config['spline']["k"],)
+            spl, fitted_points = bspline_fitting.fit_bspline(
+                path_coords, n_points=self.config['spline']["n_points"],
+                k=self.config['spline']["k"],
+                smoothing=self.config['spline'].get("final_smoothing"))
 
             self.full_bsplines.append(fitted_points)
 
@@ -666,7 +669,8 @@ class DLOGraph:
             cycle_coords = np.array([self.G.nodes[n]["pos"] for n in cycle_nodes])
             spl, fitted_points = bspline_fitting.fit_bspline(
                 cycle_coords, n_points=self.config['spline']["n_points"],
-                k=self.config['spline']["k"], periodic=True)
+                k=self.config['spline']["k"], periodic=True,
+                smoothing=self.config['spline'].get("final_smoothing"))
             self.full_bsplines.append(fitted_points)
 
     def visualize(self, figsize: Tuple[int, int] = (10, 10), 

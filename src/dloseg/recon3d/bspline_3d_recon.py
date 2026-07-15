@@ -163,7 +163,8 @@ def find_correspondences(spline_func_left, spline_func_right, tck_right, num_sam
     return np.array(matched_points_left), np.array(matched_points_right)
 
 def triangulate_and_reconstruct(calib_data, bspline_left_pts, bspline_right_pts,
-                                z_range=None, matching='arclength'):
+                                z_range=None, matching='arclength',
+                                smoothing_mm=3.0):
     """
     Main pipeline function to perform 3D reconstruction of a B-spline.
 
@@ -177,6 +178,10 @@ def triangulate_and_reconstruct(calib_data, bspline_left_pts, bspline_right_pts,
         matching (str): 'arclength' (default — robust for a single wire seen in
             both views, matches by normalized arc length with local epipolar
             refinement) or 'epipolar' (global y-search; fails on hairpins).
+        smoothing_mm (float): allowed RMS residual per point (millimeters) for
+            the final 3D spline fit. Smaller = follows the triangulated points
+            more tightly (0 interpolates them exactly, including their noise);
+            larger = smoother curve. Default 3 mm.
 
     Returns:
         tuple: (points_3d, spline_3d_func)
@@ -226,9 +231,10 @@ def triangulate_and_reconstruct(calib_data, bspline_left_pts, bspline_right_pts,
          return points_3d, None
 
     points_3d_t = points_3d.T
-    # Smoothing budget: allow ~3 mm residual per point (scipy's s is the total
-    # sum of squared residuals) — s=0.1 would allow ~3 cm and shortcut loops.
-    s_3d = len(points_3d) * (0.003 ** 2)
+    # Smoothing budget: scipy's s is the TOTAL sum of squared residuals, so
+    # allow smoothing_mm of residual per point (s=0.1 would allow ~3 cm and
+    # shortcut loops).
+    s_3d = len(points_3d) * (smoothing_mm / 1000.0) ** 2
     tck_3d, u_3d = splprep([points_3d_t[0], points_3d_t[1], points_3d_t[2]], s=s_3d, k=3)
     
     def spline_3d_func(u_interp):
