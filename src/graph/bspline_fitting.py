@@ -1,3 +1,17 @@
+"""2D curve smoothing / B-spline fitting utilities for the DLO graph pipeline.
+
+Provides interchangeable smoothing back-ends used by DLOGraph:
+- smooth_2d_branch_splprep: parametric B-spline via scipy splprep/splev
+  (the one actually used by DLOGraph.fit_spline_to_branches).
+- smooth_2d_branch_savgol:  fast Savitzky-Golay filtering per axis.
+- smooth_2d_branch:         arc-length-parameterized UnivariateSpline per axis.
+- fit_bspline:              final B-spline fit over an ordered point path
+  (used by DLOGraph.fit_bspline_to_graph), returns (tck, sampled points).
+- extract_control_points / plot_results: introspection and plotting helpers.
+
+Running this file directly (`python bspline_fitting.py`) demos the fit on
+synthetic noisy circular data.
+"""
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import interpolate

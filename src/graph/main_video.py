@@ -1,3 +1,13 @@
+"""Real-time DLO spline extraction on a video stream.
+
+Reads a video file frame by frame, thresholds each frame into a binary mask,
+resizes to 256x256, runs the DLOGraph pipeline (same `get_spline` as
+graph/main.py), rescales the resulting spline points to the original
+resolution and draws them on a blank canvas with cv2.polylines, displayed
+live in an OpenCV window (press 'q' to quit).
+
+Usage: set config['video_path'] in __main__, then `python main_video.py`.
+"""
 import cv2
 import matplotlib.pyplot as plt
 import time

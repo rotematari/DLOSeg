@@ -1,3 +1,14 @@
+"""Export frames from a recorded ZED .svo2 file (adapted from the ZED SVO export sample).
+
+Opens a hard-coded SVO recording, grabs frames sequentially and extracts the
+left/right (or left/depth, depending on `mode`) images. Currently shows the
+left frame in an OpenCV window and writes the right frame to
+record/recordings/rightNNNNNN.png; the left-image write is commented out.
+Contains verbose debugging of the retrieved buffer's shape/dtype.
+
+Edit `svo_input_path`, `output_dir` and `opt["mode"]` at the top before
+running. Requires the pyzed SDK.
+"""
 import sys
 import pyzed.sl as sl
 import numpy as np
@@ -5,7 +16,7 @@ import cv2
 from pathlib import Path
 import enum
 import argparse
-import os 
+import os
 
 class AppType(enum.Enum):
     LEFT_AND_RIGHT = 1

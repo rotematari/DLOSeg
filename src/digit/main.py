@@ -1,7 +1,14 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 
 # This source code is licensed under the license found in the LICENSE file in the root directory of this source tree.
+"""Connection demo for DIGIT tactile sensors (based on the digit-interface example).
 
+Lists connected DIGIT devices, connects to two of them by hard-coded serial
+numbers (D21123 = left gripper, D21124 = right gripper), configures LED
+intensity / VGA resolution / 30 fps, grabs a frame, and opens the live
+stream view for the first sensor. Requires the `digit-interface` package
+and physically connected DIGIT sensors.
+"""
 import logging
 import pprint
 import time

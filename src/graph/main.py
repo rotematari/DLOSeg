@@ -1,3 +1,20 @@
+"""Single-image DLO spline extraction demo.
+
+Loads one binary segmentation mask (left image of a stereo pair), resizes it
+to 256x256, and runs the full DLOGraph pipeline:
+mask -> skeleton -> graph -> prune -> per-branch spline fit -> DLO
+reconstruction -> global B-spline fit. The resulting B-splines are rescaled
+back to the original resolution and plotted next to the real RGB image.
+
+Also contains (currently unused) helpers for ZED stereo work:
+- get_zed_calibration: parse a ZED calibration YAML into K/D/R/T/P matrices.
+- rectify_stereo_pair:  cv2.stereoRectify-based rectification of a raw pair.
+- visualize_rectification: side-by-side before/after comparison plot.
+
+Usage: edit the `config` dict in __main__ (mask paths, spline params,
+visualization flags), then run `python main.py`.
+"""
+import os
 import cv2
 import matplotlib.pyplot as plt
 import time
@@ -5,6 +22,10 @@ from graph.dlo_graph import DLOGraph  # Assuming you place the class in graph/dl
 import logging
 import numpy as np
 import yaml
+
+# Repo root (two levels up from src/graph/) so relative dataset paths work
+# no matter where the script is launched from.
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 def load_yaml(yaml_path):
     """
@@ -73,7 +94,7 @@ def get_spline(mask, config):
         graph.visualize(node_size=config['node_size_small'], with_labels=False, title="Graph After DLO Reconstruction",)
     # Fit B-spline to the full graph
     graph.fit_bspline_to_graph()
-    print("Done")
+    print("Done ")
     return graph
 
 
@@ -263,11 +284,11 @@ def visualize_rectification(raw_left, raw_right, rectified_left, rectified_right
 if __name__ == '__main__':
 
     config = {
-        # File paths
-        'mask_l_path': '/home/admina/segmetation/DLOSeg/frames_output/frame_001282.png',
-        'mask_r_path': '/home/admina/segmetation/DLOSeg/outputs/mbest_ds/S1/gt_images/img1.png',
-        'img_real_path': '/home/admina/segmetation/DLOSeg/src/graph/data_720_15fps/img_04.png',
-        'zed_calib_path': '/home/admina/segmetation/DLOSeg/src/zed/calibration_data/zed_2i_cal_data.yaml',
+        # File paths (relative to the repo root)
+        'mask_l_path': os.path.join(REPO_ROOT, 'DATASETS/SBHC/S3/gt_images/img83.png'),
+        'mask_r_path': os.path.join(REPO_ROOT, 'outputs/mbest_ds/S1/gt_images/img1.png'),
+        'img_real_path': os.path.join(REPO_ROOT, 'src/graph/data_720_15fps/img_04.png'),
+        'zed_calib_path': os.path.join(REPO_ROOT, 'src/zed/calibration_data/zed_2i_cal_data.yaml'),
         
         # ZED calibration settings
         'zed': {
@@ -284,7 +305,7 @@ if __name__ == '__main__':
         'statistic': 'mean',
         'min_cluster_factor': 1.0,
         'padding_size': 0,
-        'max_prune_length': 10,
+        'max_prune_length': 5,
         'dialate_iterations': 1,  # Number of iterations for dilation
         'erode_iterations': 1,  # Number of iterations for erosion
         'max_dist_to_connect_leafs': 60,  # Maximum distance to connect leaf nodes
@@ -292,8 +313,10 @@ if __name__ == '__main__':
 
         # Spline fitting parameters
         'spline': {
+            'k': 3,  # B-spline degree
             'smoothing': 20,
-            'max_num_points': 50
+            'n_points': 500,
+            'max_num_points': 500  # Maximum number of points in the spline
         },
         
         # Visualization settings
@@ -302,7 +325,8 @@ if __name__ == '__main__':
         'show_pruned_graph': True,
         'show_spline_graph': True,
         'show_dlo_graph': True,
-        'show_rectification': False,
+        
+        'show_rectification': True,
         'show_final_plots': False,
         'node_size_small': 1,
         'node_size_large': 5,
@@ -321,27 +345,28 @@ if __name__ == '__main__':
     # plt.imshow(img_real_r, cmap='gray')
     # plt.show()
     # Create graph instance and load mask
-    img_real_l, img_real_r = get_images_from_stereo_pair(config['mask_l_path'], config['mask_r_path'])
+    # img_real_l, img_real_r = get_images_from_stereo_pair(config['mask_l_path'], config['mask_r_path'])
     # rect_left, rect_right = rectify_stereo_pair(img_real_l, img_real_r, zed_calibration, alpha=0)
-    rect_left,rect_right = img_real_l, img_real_r
-    rect_left = cv2.threshold(rect_left, 80, 255, cv2.THRESH_BINARY)[1]
+    # rect_left,rect_right = img_real_l, img_real_r
+
+    rect_left = cv2.imread(config['mask_l_path'], cv2.IMREAD_GRAYSCALE)
+    if rect_left is None:
+        raise FileNotFoundError(f"Could not read mask image: {config['mask_l_path']}")
+    # rect_left = cv2.threshold(rect_left, 100, 255, cv2.THRESH_BINARY)[1]
     # visualize_rectification(img_real_l, img_real_r, rect_left, rect_right)
-    # plt.figure()
-    # plt.imshow(rect_left, cmap='gray')
-    # plt.title('Rectified Left Image')
-    # plt.pause(0.1)
-    # plt.figure()
-    # plt.imshow(rect_right, cmap='gray')
-    # plt.title('Rectified Right Image')
-    # plt.pause(0.1)
-    # resize image to 256 
-    
+    plt.figure()
+    plt.imshow(rect_left, cmap='gray')
+    plt.title('Rectified Left Image')
+    plt.pause(0.1)
+
+    # resize image to 256
+
     orig_h, orig_w = rect_left.shape
     new_h, new_w = 256, 256
     if orig_h > 256 or orig_w > 256:
         print(f"Resizing images from {orig_h}x{orig_w} to 256x256")
         rect_left = cv2.resize(rect_left, (new_h, new_w), interpolation=cv2.INTER_LINEAR)
-        rect_right = cv2.resize(rect_right, (new_h, new_w), interpolation=cv2.INTER_LINEAR)
+        # rect_right = cv2.resize(rect_right, (new_h, new_w), interpolation=cv2.INTER_LINEAR)
     else:
         print(f"Images are already smaller than 128x128, no resizing needed")
 
@@ -362,22 +387,16 @@ if __name__ == '__main__':
 
     # rect_right = cv2.resize(rect_right, (real_W,
     # plot full_bspline of left and right
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 10))
     ax1.imshow(rect_left, cmap='gray')
-    for i, bspline_pts in enumerate(G_left.full_bsplins):
+    for i, bspline_pts in enumerate(G_left.full_bsplines):
         bspline_pts_orig = bspline_pts * np.array([scale_x, scale_y]) - np.array([G_left.padding_size*2, G_left.padding_size*2])
-        ax1.plot(bspline_pts_orig[:, 0], bspline_pts_orig[:, 1], label=f'Left Full B-spline {i}')
-    ax1.set_title('Left Full B-spline')
-    ax1.axis('equal')
-    ax1.legend()
-    # ax1.invert_yaxis()
-    # ax2.plot(G_right.full_bspline[:, 0], G_right.full_bspline[:, 1], 'b-', label='Right Full B-spline')
-    # ax2.invert_yaxis()
-    # ax2.set_title('Right Full B-spline')
-    # ax2.axis('equal')
-    # ax2.legend()
+        ax1.plot(bspline_pts_orig[:, 0], bspline_pts_orig[:, 1], label=f'B-spline {i}')
+    ax1.axis('off')
+    
+    ax1.legend(loc="upper right", fontsize=18)
+    ax2.axis('off')
+    real_image = cv2.imread(os.path.join(REPO_ROOT, 'DATASETS/SBHC/S3/images/img83.jpg'), cv2.IMREAD_COLOR_RGB)
+    ax2.imshow(real_image)
+    plt.tight_layout()
     plt.show()
-    # print(f"Left graph nodes: {len(G_left.nodes())}, edges: {len(G_left.edges())}")
-
-
-    # spline matching

@@ -1,3 +1,16 @@
+"""Standalone fast branch-smoothing utilities for skeleton graphs.
+
+Alternative/experimental smoothing helpers that operate directly on a
+NetworkX graph with 'pos' node attributes (not currently wired into
+DLOGraph, which uses bspline_fitting instead):
+
+- extract_branches_fast / trace_branch: split the graph into branches
+  (paths between nodes of degree != 2).
+- smooth_graph_branches_fast:  parametric B-spline smoothing per branch.
+- smooth_branches_moving_average: cheaper moving-average smoothing that
+  preserves branch endpoints.
+- apply_smoothing / plot_smoothed_graph: convenience wrapper and plotting.
+"""
 import numpy as np
 from scipy.interpolate import splprep, splev
 from scipy.spatial.distance import cdist

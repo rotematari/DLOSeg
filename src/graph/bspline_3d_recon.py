@@ -1,3 +1,20 @@
+"""3D DLO reconstruction from a rectified stereo pair of 2D B-splines.
+
+Pipeline (triangulate_and_reconstruct):
+1. Fit parametric 2D B-splines to the left/right spline point sets.
+2. Find left<->right correspondences via the epipolar constraint
+   (y_left == y_right on rectified images), solving for the right-spline
+   parameter with fsolve.
+3. Triangulate matched pairs with cv2.triangulatePoints using the P1/P2
+   projection matrices from ZED calibration.
+4. Fit a smooth 3D B-spline through the triangulated points.
+
+`visualize_reconstruction` shows the 2D inputs, raw 3D point cloud, and the
+final 3D spline. Running the file directly demos the pipeline on mock
+calibration data and synthetic spline points — replace those with real ZED
+calibration (see graph/main.py:get_zed_calibration) and the 2D splines
+produced by DLOGraph.
+"""
 import numpy as np
 import cv2
 from scipy.interpolate import splprep, splev
