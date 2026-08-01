@@ -16,9 +16,9 @@ uv sync
 
 `uv sync` creates `.venv/` and installs everything declared in `pyproject.toml`, including torch (CUDA build), `groundingdino-py`, and the editable `dloseg` package itself.
 
-### ⚠️ uv sync prunes undeclared packages
+### Uv-sync-prunes-undeclared-packages
 
-`uv sync` removes anything from `.venv` that is not declared in `pyproject.toml`. Two things are installed outside of uv and **must be re-installed after every sync**:
+⚠️ `uv sync` removes anything from `.venv` that is not declared in `pyproject.toml`. Two things are installed outside of uv and **must be re-installed after every sync**:
 
 1. **pyzed** (ZED SDK Python API — proprietary, not on PyPI):
 
@@ -30,9 +30,9 @@ uv sync
 
 2. Nothing else — if you find yourself `pip install`-ing into the venv, add the package to `pyproject.toml` instead, or it will vanish on the next sync.
 
-## Model checkpoints (segmentation only)
+## Model-checkpoints
 
-Checkpoints are gitignored. Place them at:
+**Segmentation only.** Checkpoints are gitignored. Place them at:
 
 | File | Where to get it |
 |------|-----------------|

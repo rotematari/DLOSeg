@@ -32,7 +32,7 @@ Per-stage timing is printed (DINO is the slow part; MobileSAMv2 with the efficie
 
 - `groundingdino-py` is declared in `pyproject.toml` (imports as `groundingdino`).
 - The vendored MobileSAMv2 tree (`src/segmentors/MobileSAMv2/`) is third-party code — **do not refactor**; it is imported as `segmentors.MobileSAMv2.*` and the glue script bootstraps `sys.path` itself.
-- Checkpoint locations: see [02 — Setup](02_setup.md#model-checkpoints-segmentation-only).
+- Checkpoint locations: see [02 — Setup](02_setup.md#model-checkpoints).
 
 ## Producing masks for the graph pipeline
 

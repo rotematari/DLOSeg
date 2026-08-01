@@ -24,7 +24,7 @@ The junction removal in stage 2 left 4 loose endpoints at every crossing. These 
 ### 5. `fit_bspline_to_graph` — final output
 For every pair of remaining leaf nodes with a connecting path, fit one B-spline (`spline.k`, `spline.n_points`). Results land in `graph.full_bsplines` — a list of `(n_points, 2)` arrays, one per wire.
 
-## Config reference
+## Config-reference
 
 | Key | Typical | Meaning |
 |-----|---------|---------|
