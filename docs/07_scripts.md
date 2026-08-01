@@ -49,7 +49,7 @@ MPLBACKEND=Agg uv run scripts/recon3d_demo.py
 
 ## `zed_svo_export.py`
 
-Export frames from a recorded ZED `.svo2` file (left/right or left/depth depending on `mode`). Edit `svo_input_path` / `output_dir` at the top. Requires **pyzed** ([02 — Setup](02_setup.md#-uv-sync-prunes-undeclared-packages)).
+Export frames from a recorded ZED `.svo2` file (left/right or left/depth depending on `mode`). Edit `svo_input_path` / `output_dir` at the top. Requires **pyzed** ([02 — Setup](02_setup.md#uv-sync-prunes-undeclared-packages)).
 
 ## Segmentation entry point (not in `scripts/`)
 
