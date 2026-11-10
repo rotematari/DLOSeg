@@ -4,12 +4,11 @@ End-to-end demo of the recon3d pipeline on captured data:
 
 1. Load + rectify the left/right wire masks for one frame (dloseg.recon3d.frame_io).
 2. Run the 2D graph pipeline on each rectified mask -> 2D B-splines.
-3. Reconstruct the 3D spline by triangulation (baseline) and/or the
-   correspondence-free projection-based fit, and save figures.
+3. Reconstruct the 3D spline by triangulation and save figures.
 
 Outputs figures to outputs/recon3d/. Headless-safe:
-    MPLBACKEND=Agg uv run scripts/recon3d_demo.py [frame] [smoothing_mm] [--method M]
-    # e.g.: ... recon3d_demo.py img_05 5 --method both
+    MPLBACKEND=Agg uv run scripts/recon3d_demo.py [frame] [smoothing_mm]
+    # e.g.: ... recon3d_demo.py img_05 5
 """
 
 from __future__ import annotations
@@ -33,12 +32,6 @@ def _parse_args() -> argparse.Namespace:
         type=float,
         default=3.0,
         help="final 3D spline smoothing budget (RMS mm per triangulated point)",
-    )
-    parser.add_argument(
-        "--method",
-        choices=["triangulation", "projection", "both"],
-        default="triangulation",
-        help="which 3D reconstruction to run (default: triangulation, behavior-preserving)",
     )
     return parser.parse_args()
 
@@ -66,7 +59,7 @@ def main() -> None:
     fig.savefig(os.path.join(out_dir, f"{frame}_2d_splines.png"), dpi=150, bbox_inches="tight")
     plt.close(fig)
 
-    # --- Triangulation baseline ----------------------------------------------
+    # --- Triangulation ---------------------------------------------------------
     points_3d, spline_3d_func = triangulate_and_reconstruct(
         frame_data.calib_rect,
         left_pts,
@@ -80,39 +73,14 @@ def main() -> None:
         f"(median {np.median(z):.3f} m)"
     )
 
-    if args.method in ("triangulation", "both"):
-        visualize_reconstruction(
-            left_pts,
-            right_pts,
-            points_3d,
-            spline_3d_func,
-            save_path=os.path.join(out_dir, f"{frame}_3d_recon.png"),
-        )
-        np.save(os.path.join(out_dir, f"{frame}_points3d.npy"), points_3d)
-
-    # --- Projection-based fit (correspondence-free) --------------------------
-    if args.method in ("projection", "both"):
-        # Local import: keeps the triangulation-only path independent of the
-        # optimizer module and its scipy.optimize dependency at load time.
-        from dloseg.recon3d.projection_recon import reconstruct_projection_based
-
-        proj_func, _, info = reconstruct_projection_based(
-            frame_data.calib_rect, left_pts, right_pts, spline_3d_func
-        )
-        u = np.linspace(0.0, 1.0, 100)
-        proj_pts = proj_func(u)
-        print(
-            f"Projection-based fit: cost={info['cost']:.4g}, "
-            f"nfev={info['nfev']}, runtime={info['runtime_s']:.2f} s"
-        )
-        np.save(os.path.join(out_dir, f"{frame}_points3d_projection.npy"), proj_pts)
-        visualize_reconstruction(
-            left_pts,
-            right_pts,
-            proj_pts,
-            proj_func,
-            save_path=os.path.join(out_dir, f"{frame}_3d_recon_projection.png"),
-        )
+    visualize_reconstruction(
+        left_pts,
+        right_pts,
+        points_3d,
+        spline_3d_func,
+        save_path=os.path.join(out_dir, f"{frame}_3d_recon.png"),
+    )
+    np.save(os.path.join(out_dir, f"{frame}_points3d.npy"), points_3d)
 
     print(f"Results in {out_dir}")
 

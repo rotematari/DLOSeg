@@ -1,10 +1,7 @@
-"""Shared frame loading for the recon3d demo and evaluation scripts.
+"""Frame loading for the recon3d demo (`scripts/recon3d_demo.py`).
 
-Both `scripts/recon3d_demo.py` and `scripts/recon3d_eval.py` need the same
-front half of the pipeline: read a frame's left/right wire masks, rectify them
-with the ZED factory calibration, and turn each rectified mask into a full-res
-2D B-spline. This module owns that logic so the scripts share one loader
-instead of importing each other.
+Reads a frame's left/right wire masks, rectifies them with the ZED factory
+calibration, and turns each rectified mask into a full-res 2D B-spline.
 """
 
 from __future__ import annotations
